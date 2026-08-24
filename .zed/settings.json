@@ -1,0 +1,18 @@
+{
+  // Python 学习项目：只开 basedpyright 提供 Python 跳转（配合全局 enable_language_server: false）
+  "languages": {
+    "Python": {
+      "enable_language_server": true,
+      "language_servers": ["basedpyright"]
+    }
+  },
+  // 只分析打开的文件：跳转/补全保留，避免全量索引吃内存
+  "lsp": {
+    "basedpyright": {
+      "settings": {
+        "basedpyright.analysis.diagnosticMode": "openFilesOnly",
+        "basedpyright.analysis.autoSearchPaths": false
+      }
+    }
+  }
+}

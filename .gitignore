@@ -1,0 +1,7 @@
+# 子项目各自独立 git 管理，不纳入工作区仓库
+/demo-api/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
