@@ -6,12 +6,17 @@
       "language_servers": ["basedpyright"]
     }
   },
-  // 只分析打开的文件：跳转/补全保留，避免全量索引吃内存
+  // 彻底关闭 basedpyright 类型推断告警，仅分析打开文件以压低内存
   "lsp": {
     "basedpyright": {
       "settings": {
-        "basedpyright.analysis.diagnosticMode": "openFilesOnly",
-        "basedpyright.analysis.autoSearchPaths": false
+        "basedpyright": {
+          "analysis": {
+            "typeCheckingMode": "off",
+            "diagnosticMode": "openFilesOnly",
+            "autoSearchPaths": false
+          }
+        }
       }
     }
   }
