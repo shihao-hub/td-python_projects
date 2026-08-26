@@ -13,7 +13,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # 连接串从 .env 读，不落进 alembic.ini（避免密码入库）；%% 是 configparser 插值转义
-config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
+# 迁移走同步驱动：应用用 psycopg_async，alembic 换回 psycopg
+sync_url = settings.database_url.replace("+psycopg_async", "+psycopg")
+config.set_main_option("sqlalchemy.url", sync_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

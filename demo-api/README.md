@@ -1,6 +1,6 @@
 # demo-api
 
-超基础 FastAPI 后端：uv + structlog + SQLAlchemy + PostgreSQL。
+超基础 FastAPI 后端：uv + structlog + SQLAlchemy（async）+ PostgreSQL（psycopg_async 驱动）。
 
 ## 数据库
 

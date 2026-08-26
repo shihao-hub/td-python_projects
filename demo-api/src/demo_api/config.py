@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     app_name: str = "demo-api"
     debug: bool = False
     log_level: str = "INFO"
-    database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/demo"
+    database_url: str = "postgresql+psycopg_async://postgres:postgres@localhost:5432/demo"
     db_schema: str = "test"
 
 

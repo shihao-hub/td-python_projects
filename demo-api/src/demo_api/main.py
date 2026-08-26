@@ -19,6 +19,7 @@ logger = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("app_started", app=settings.app_name)
     yield
+    await engine.dispose()
     logger.info("app_stopped")
 
 
@@ -46,10 +47,10 @@ async def log_requests(request: Request, call_next):
 
 
 @app.get("/health")
-def health():
+async def health():
     try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
         return {"status": "ok"}
     except Exception as exc:
         logger.error("health_check_db_failed", error=str(exc))
