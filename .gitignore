@@ -12,3 +12,6 @@ pystand-lab/**/cli-debug.log
 # flet-android-lab：flet build 产物不入库
 flet-android-lab/build/
 
+# python-launcher-go：启动器 exe 不入库（拷入各项目的改名 exe 同样被忽略）
+*.exe
+
