@@ -3,8 +3,9 @@
   "languages": {
     "Python": {
       "enable_language_server": true,
-      "language_servers": ["basedpyright"]
-    }
+      "language_servers": ["basedpyright", "ruff"],
+      "formatter": "language_server"
+    },
   },
   // 彻底关闭 basedpyright 类型推断告警，仅分析打开文件以压低内存
   "lsp": {
@@ -14,10 +15,21 @@
           "analysis": {
             "typeCheckingMode": "off",
             "diagnosticMode": "openFilesOnly",
-            "autoSearchPaths": false
-          }
-        }
-      }
-    }
-  }
+            "autoSearchPaths": false,
+          },
+        },
+      },
+    },
+    // 彻底关掉 Ruff 的代码检查与提示，只留格式化
+    "ruff": {
+      "initialization_options": {
+        "settings": {
+          "lint": {
+            "enable": false,
+          },
+          "hover": false,
+        },
+      },
+    },
+  },
 }
