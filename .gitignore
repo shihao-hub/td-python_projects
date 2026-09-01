@@ -3,11 +3,11 @@ __pycache__/
 *.pyc
 .venv/
 
-# pystand-lab：二进制与打包产物不入库（NOTES.md、demo/ 源码保留）
-pystand-lab/downloads/
-pystand-lab/dist/
-pystand-lab/tools/
-pystand-lab/**/cli-debug.log
+# .archived/pystand-lab：二进制与打包产物不入库（NOTES.md、demo/ 源码保留）
+.archived/pystand-lab/downloads/
+.archived/pystand-lab/dist/
+.archived/pystand-lab/tools/
+.archived/pystand-lab/**/cli-debug.log
 
 # flet-android-lab：flet build 产物不入库
 flet-android-lab/build/
