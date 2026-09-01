@@ -4,12 +4,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import structlog
+
+logger = structlog.get_logger(__name__)
+
 DB_PATH: Path | None = None
 
 _DEFAULT_DIR = Path(__file__).parent / "data"
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS anniversaries (
+CREATE TABLE IF NOT EXISTS day_entries (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
     date       TEXT NOT NULL,
@@ -23,10 +27,11 @@ def init(db_path: Path) -> None:
     DB_PATH = Path(db_path)
     conn = _connect()
     conn.close()
+    logger.info("db_initialized", path=str(DB_PATH))
 
 
 def _target_path() -> Path:
-    return DB_PATH or Path(os.getenv("ANNIVERSARY_DB") or _DEFAULT_DIR / "anniversaries.db")
+    return DB_PATH or Path(os.getenv("DAY_ENTRIES_DB") or _DEFAULT_DIR / "day_entries.db")
 
 
 def _connect() -> sqlite3.Connection:
@@ -40,7 +45,9 @@ def _connect() -> sqlite3.Connection:
     except sqlite3.DatabaseError:
         conn.close()
         stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        path.rename(path.with_name(f"{path.name}.corrupt-{stamp}"))
+        corrupt_path = path.with_name(f"{path.name}.corrupt-{stamp}")
+        path.rename(corrupt_path)
+        logger.error("db_corrupt_recovered", renamed=str(corrupt_path))
         conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row
         conn.execute(_SCHEMA)
@@ -52,7 +59,7 @@ def list_all() -> list[dict]:
     conn = _connect()
     try:
         rows = conn.execute(
-            "SELECT id, name, date, created_at FROM anniversaries"
+            "SELECT id, name, date, created_at FROM day_entries"
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -69,12 +76,13 @@ def create(name: str, date_iso: str) -> dict:
     conn = _connect()
     try:
         conn.execute(
-            "INSERT INTO anniversaries (id, name, date, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO day_entries (id, name, date, created_at) VALUES (?, ?, ?, ?)",
             (item["id"], item["name"], item["date"], item["created_at"]),
         )
         conn.commit()
     finally:
         conn.close()
+    logger.info("entry_created", id=item["id"], name=name, date=date_iso)
     return item
 
 
@@ -82,11 +90,14 @@ def update(item_id: str, name: str, date_iso: str) -> bool:
     conn = _connect()
     try:
         cur = conn.execute(
-            "UPDATE anniversaries SET name = ?, date = ? WHERE id = ?",
+            "UPDATE day_entries SET name = ?, date = ? WHERE id = ?",
             (name, date_iso, item_id),
         )
         conn.commit()
-        return cur.rowcount > 0
+        changed = cur.rowcount > 0
+        if changed:
+            logger.info("entry_updated", id=item_id, name=name, date=date_iso)
+        return changed
     finally:
         conn.close()
 
@@ -94,8 +105,11 @@ def update(item_id: str, name: str, date_iso: str) -> bool:
 def delete(item_id: str) -> bool:
     conn = _connect()
     try:
-        cur = conn.execute("DELETE FROM anniversaries WHERE id = ?", (item_id,))
+        cur = conn.execute("DELETE FROM day_entries WHERE id = ?", (item_id,))
         conn.commit()
-        return cur.rowcount > 0
+        changed = cur.rowcount > 0
+        if changed:
+            logger.info("entry_deleted", id=item_id)
+        return changed
     finally:
         conn.close()

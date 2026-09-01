@@ -1,0 +1,203 @@
+{
+  "id": "2026-08-30-000711",
+  "generated_at": "2026-08-29T16:07:11.2367892Z",
+  "language": "zh",
+  "pages": [
+    {
+      "slug": "1-xiang-mu-zong-lan-yong-chun-python-flet-kai-fa-android-ying-yong",
+      "title": "项目总览：用纯 Python + Flet 开发 Android 应用",
+      "file": "1-xiang-mu-zong-lan-yong-chun-python-flet-kai-fa-android-ying-yong.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "2-kuai-su-kai-shi-an-zhuang-uv-bing-yun-xing-ji-nian-ri-app",
+      "title": "快速开始：安装 uv 并运行纪念日 App",
+      "file": "2-kuai-su-kai-shi-an-zhuang-uv-bing-yun-xing-ji-nian-ri-app.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "3-re-zhong-zai-kai-fa-gong-zuo-liu-flet-run-yu-zhi-jie-yun-xing-de-qu-bie",
+      "title": "热重载开发工作流：flet run 与直接运行的区别",
+      "file": "3-re-zhong-zai-kai-fa-gong-zuo-liu-flet-run-yu-zhi-jie-yun-xing-de-qu-bie.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "4-ren-shi-ji-nian-ri-app-gong-neng-jie-mian-yu-jiao-hu-liu-cheng",
+      "title": "认识纪念日 App：功能、界面与交互流程",
+      "file": "4-ren-shi-ji-nian-ri-app-gong-neng-jie-mian-yu-jiao-hu-liu-cheng.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "5-si-ceng-fen-ceng-jia-gou-ui-chun-luo-ji-cun-chu-ri-zhi-de-zhi-ze-hua-fen",
+      "title": "四层分层架构：UI、纯逻辑、存储、日志的职责划分",
+      "file": "5-si-ceng-fen-ceng-jia-gou-ui-chun-luo-ji-cun-chu-ri-zhi-de-zhi-ze-hua-fen.md",
+      "section": "深入解析",
+      "group": "架构与设计",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "6-flet-0-86-sheng-ming-shi-ui-mo-xing-async-main-yu-ft-run-ru-kou",
+      "title": "Flet 0.86 声明式 UI 模型：async main 与 ft.run 入口",
+      "file": "6-flet-0-86-sheng-ming-shi-ui-mo-xing-async-main-yu-ft-run-ru-kou.md",
+      "section": "深入解析",
+      "group": "架构与设计",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "7-lie-biao-xuan-ran-listview-listtile-yu-tiao-jian-kong-tai-ti-shi",
+      "title": "列表渲染：ListView、ListTile 与条件空态提示",
+      "file": "7-lie-biao-xuan-ran-listview-listtile-yu-tiao-jian-kong-tai-ti-shi.md",
+      "section": "深入解析",
+      "group": "UI 层实现详解",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "8-xin-zeng-bian-ji-dui-hua-kuang-show_dialog-yu-pop_dialog-de-sheng-ming-zhou-qi",
+      "title": "新增/编辑对话框：show_dialog 与 pop_dialog 的生命周期",
+      "file": "8-xin-zeng-bian-ji-dui-hua-kuang-show_dialog-yu-pop_dialog-de-sheng-ming-zhou-qi.md",
+      "section": "深入解析",
+      "group": "UI 层实现详解",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "9-nian-yue-ri-xia-la-xuan-ri-qi-gui-bi-datepicker-dui-hua-kuang-die-jia-de-gong-cheng-qu-she",
+      "title": "年月日下拉选日期：规避 DatePicker 对话框叠加的工程取舍",
+      "file": "9-nian-yue-ri-xia-la-xuan-ri-qi-gui-bi-datepicker-dui-hua-kuang-die-jia-de-gong-cheng-qu-she.md",
+      "section": "深入解析",
+      "group": "UI 层实现详解",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "10-biao-dan-xiao-yan-yu-yong-hu-fan-kui-ming-cheng-fei-kong-fei-fa-ri-qi-yu-snackbar",
+      "title": "表单校验与用户反馈：名称非空、非法日期与 SnackBar",
+      "file": "10-biao-dan-xiao-yan-yu-yong-hu-fan-kui-ming-cheng-fei-kong-fei-fa-ri-qi-yu-snackbar.md",
+      "section": "深入解析",
+      "group": "UI 层实现详解",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "11-bi-bao-shi-zhuang-tai-guan-li-refresh-qu-dong-de-zheng-ti-shua-xin-mo-shi",
+      "title": "闭包式状态管理：refresh 驱动的整体刷新模式",
+      "file": "11-bi-bao-shi-zhuang-tai-guan-li-refresh-qu-dong-de-zheng-ti-shua-xin-mo-shi.md",
+      "section": "深入解析",
+      "group": "UI 层实现详解",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "12-tian-shu-ji-suan-yu-wen-an-sheng-cheng-days_until-yu-label",
+      "title": "天数计算与文案生成：days_until 与 label",
+      "file": "12-tian-shu-ji-suan-yu-wen-an-sheng-cheng-days_until-yu-label.md",
+      "section": "深入解析",
+      "group": "核心纯函数",
+      "level": "Beginner"
+    },
+    {
+      "slug": "13-pai-xu-she-ji-dao-ji-shi-you-xian-de-yuan-zu-pai-xu-jian",
+      "title": "排序设计：倒计时优先的元组排序键",
+      "file": "13-pai-xu-she-ji-dao-ji-shi-you-xian-de-yuan-zu-pai-xu-jian.md",
+      "section": "深入解析",
+      "group": "核心纯函数",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "14-ri-qi-bian-jie-chang-jing-dang-tian-kua-nian-yu-2-yue-29-ri-de-chu-li",
+      "title": "日期边界场景：当天、跨年与 2 月 29 日的处理",
+      "file": "14-ri-qi-bian-jie-chang-jing-dang-tian-kua-nian-yu-2-yue-29-ri-de-chu-li.md",
+      "section": "深入解析",
+      "group": "核心纯函数",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "15-sqlite-luo-sql-crud-can-shu-hua-cha-xun-yu-lian-jie-guan-li",
+      "title": "SQLite 裸 SQL CRUD：参数化查询与连接管理",
+      "file": "15-sqlite-luo-sql-crud-can-shu-hua-cha-xun-yu-lian-jie-guan-li.md",
+      "section": "深入解析",
+      "group": "数据持久化",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "16-shu-ju-ku-lu-jing-san-ji-ce-lue-xi-tong-mu-lu-ben-di-hui-tui-yu-anniversary_db-huan-jing-bian-liang",
+      "title": "数据库路径三级策略：系统目录、本地回退与 ANNIVERSARY_DB 环境变量",
+      "file": "16-shu-ju-ku-lu-jing-san-ji-ce-lue-xi-tong-mu-lu-ben-di-hui-tui-yu-anniversary_db-huan-jing-bian-liang.md",
+      "section": "深入解析",
+      "group": "数据持久化",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "17-biao-jie-gou-she-ji-iso-ri-qi-zi-fu-chuan-de-zi-dian-xu-pai-xu-you-shi",
+      "title": "表结构设计：ISO 日期字符串的字典序排序优势",
+      "file": "17-biao-jie-gou-she-ji-iso-ri-qi-zi-fu-chuan-de-zi-dian-xu-pai-xu-you-shi.md",
+      "section": "深入解析",
+      "group": "数据持久化",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "18-pi-ku-zi-yu-ji-zhi-sun-pi-jian-ce-gai-ming-bei-fen-yu-zi-dong-zhong-jian",
+      "title": "坏库自愈机制：损坏检测、改名备份与自动重建",
+      "file": "18-pi-ku-zi-yu-ji-zhi-sun-pi-jian-ce-gai-ming-bei-fen-yu-zi-dong-zhong-jian.md",
+      "section": "深入解析",
+      "group": "数据持久化",
+      "level": "Advanced"
+    },
+    {
+      "slug": "19-structlog-pei-zhi-xiang-jie-chu-li-qi-lian-console-cai-se-yu-json-xuan-ran",
+      "title": "structlog 配置详解：处理器链、Console 彩色与 JSON 渲染",
+      "file": "19-structlog-pei-zhi-xiang-jie-chu-li-qi-lian-console-cai-se-yu-json-xuan-ran.md",
+      "section": "深入解析",
+      "group": "日志体系",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "20-yun-xing-shi-ke-diao-ri-zhi-log_level-yu-log_json-huan-jing-bian-liang",
+      "title": "运行时可调日志：LOG_LEVEL 与 LOG_JSON 环境变量",
+      "file": "20-yun-xing-shi-ke-diao-ri-zhi-log_level-yu-log_json-huan-jing-bian-liang.md",
+      "section": "深入解析",
+      "group": "日志体系",
+      "level": "Beginner"
+    },
+    {
+      "slug": "21-apk-da-bao-qian-zhi-tiao-jian-jdk-17-android-sdk-yu-usb-diao-shi",
+      "title": "APK 打包前置条件：JDK 17+、Android SDK 与 USB 调试",
+      "file": "21-apk-da-bao-qian-zhi-tiao-jian-jdk-17-android-sdk-yu-usb-diao-shi.md",
+      "section": "深入解析",
+      "group": "打包与真机部署",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "22-flet-build-apk-da-bao-liu-cheng-yu-adb-zhen-ji-an-zhuang",
+      "title": "flet build apk 打包流程与 adb 真机安装",
+      "file": "22-flet-build-apk-da-bao-liu-cheng-yu-adb-zhen-ji-an-zhuang.md",
+      "section": "深入解析",
+      "group": "打包与真机部署",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "23-zhuo-mian-diao-shi-yu-zhen-ji-yan-zheng-de-neng-li-bian-jie-hua-fen",
+      "title": "桌面调试与真机验证的能力边界划分",
+      "file": "23-zhuo-mian-diao-shi-yu-zhen-ji-yan-zheng-de-neng-li-bian-jie-hua-fen.md",
+      "section": "深入解析",
+      "group": "打包与真机部署",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "24-uv-yi-lai-guan-li-yu-ling-di-san-fang-yi-lai-zhe-xue",
+      "title": "uv 依赖管理与零第三方依赖哲学",
+      "file": "24-uv-yi-lai-guan-li-yu-ling-di-san-fang-yi-lai-zhe-xue.md",
+      "section": "深入解析",
+      "group": "工程化实践",
+      "level": "Beginner"
+    },
+    {
+      "slug": "25-chun-han-shu-ke-ce-shi-xing-wu-io-she-ji-yu-bian-jie-duan-yan-ce-lue",
+      "title": "纯函数可测试性：无 IO 设计与边界断言策略",
+      "file": "25-chun-han-shu-ke-ce-shi-xing-wu-io-she-ji-yu-bian-jie-duan-yan-ce-lue.md",
+      "section": "深入解析",
+      "group": "工程化实践",
+      "level": "Intermediate"
+    }
+  ]
+}

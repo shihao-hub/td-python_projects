@@ -2,9 +2,13 @@ from datetime import date
 from pathlib import Path
 
 import flet as ft
+import structlog
 
 import core
+import log
 import storage
+
+logger = structlog.get_logger(__name__)
 
 _FUTURE_COLOR = ft.Colors.BLUE_400
 _TODAY_COLOR = ft.Colors.ORANGE_400
@@ -12,7 +16,8 @@ _PAST_COLOR = ft.Colors.GREY_500
 
 
 async def main(page: ft.Page):
-    page.title = "纪念日"
+    log.setup_logging()
+    page.title = "数日子"
     page.padding = 12
     page.theme_mode = ft.ThemeMode.SYSTEM
 
@@ -20,11 +25,14 @@ async def main(page: ft.Page):
         base = Path(await page.storage_paths.get_application_support_directory())
     except Exception:
         base = Path(__file__).parent / "data"
-    storage.init(base / "anniversaries.db")
+    logger.info("",base=base)
+    db_file = base / "day_entries.db"
+    storage.init(db_file)
+    logger.info("app_started", db=str(db_file))
 
     items_view = ft.ListView(expand=True, spacing=6)
     empty_hint = ft.Text(
-        "还没有纪念日，点右上角 + 添加",
+        "还没有记录，点右上角 + 添加",
         color=_PAST_COLOR,
         size=16,
         visible=False,
@@ -132,7 +140,7 @@ async def main(page: ft.Page):
         page.show_dialog(
             ft.AlertDialog(
                 modal=True,
-                title=ft.Text("编辑纪念日" if editing else "添加纪念日"),
+                title=ft.Text("编辑记录" if editing else "添加记录"),
                 content=ft.Column(
                     [
                         name_field,
@@ -149,7 +157,7 @@ async def main(page: ft.Page):
         )
 
     page.appbar = ft.AppBar(
-        title=ft.Text("纪念日"),
+        title=ft.Text("数日子"),
         actions=[
             ft.IconButton(ft.Icons.ADD, tooltip="添加", on_click=lambda e: open_form())
         ],
