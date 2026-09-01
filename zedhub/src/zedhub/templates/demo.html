@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>zedhub · Zed 会话浏览器</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --border: #2a2f3a;
+    --text: #d7dce4; --dim: #8b93a3; --accent: #4f9cf9; --arch: #d29922; --ok: #3fb950;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.5 "Segoe UI", Consolas, monospace; }
+  header { display: flex; align-items: baseline; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 16px; }
+  header .meta { color: var(--dim); font-size: 12px; }
+  .layout { display: flex; min-height: calc(100vh - 53px); }
+  aside { width: 260px; border-right: 1px solid var(--border); padding: 12px; flex-shrink: 0; }
+  aside h2 { font-size: 12px; color: var(--dim); margin: 8px 0 6px; font-weight: normal; }
+  .proj { display: flex; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 6px;
+          cursor: pointer; white-space: nowrap; overflow: hidden; }
+  .proj:hover { background: var(--panel2); }
+  .proj.active { background: var(--panel2); color: var(--accent); }
+  .proj .name { overflow: hidden; text-overflow: ellipsis; }
+  .proj .n { color: var(--dim); }
+  main { flex: 1; padding: 16px 20px; min-width: 0; }
+  .cards { display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; min-width: 110px; }
+  .card .v { font-size: 20px; font-weight: 600; }
+  .card .l { color: var(--dim); font-size: 11px; }
+  .bar { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .bar input[type=text] { flex: 1; min-width: 220px; background: var(--panel); border: 1px solid var(--border);
+          border-radius: 6px; padding: 7px 10px; color: var(--text); outline: none; }
+  .bar input[type=text]:focus { border-color: var(--accent); }
+  .bar select { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+          padding: 7px 8px; color: var(--text); }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--dim); font-weight: normal; font-size: 11px; padding: 6px 8px;
+       border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }
+  td { padding: 6px 8px; border-bottom: 1px solid #20242e; vertical-align: top; }
+  tr:hover td { background: var(--panel); }
+  .title { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent { color: var(--accent); white-space: nowrap; }
+  .arch { color: var(--bg); background: var(--arch); border-radius: 4px; font-size: 10px; padding: 1px 6px; }
+  .projlist { color: var(--dim); font-size: 12px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .when { color: var(--dim); white-space: nowrap; }
+  #count { color: var(--dim); margin: 8px 0; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>zedhub</h1>
+  <span class="meta">Zed 会话浏览器 · 快照时间: <span id="gen"></span></span>
+</header>
+<div class="layout">
+  <aside>
+    <h2>项目</h2>
+    <div id="projects"></div>
+  </aside>
+  <main>
+    <div class="cards" id="cards"></div>
+    <div class="bar">
+      <input type="text" id="q" placeholder="全局搜索：标题 / agent / 会话 id …">
+      <select id="fAgent"><option value="">全部 agent</option></select>
+      <select id="fArch">
+        <option value="all">全部状态</option>
+        <option value="no" selected>仅活跃</option>
+        <option value="only">仅归档</option>
+      </select>
+      <select id="fMonth"><option value="">全部时间</option></select>
+    </div>
+    <div id="count"></div>
+    <table>
+      <thead><tr><th>标题</th><th>AGENT</th><th>项目</th><th>最后更新</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </main>
+</div>
+<script>
+const DATA = __DATA_PLACEHOLDER__;
+
+const $ = id => document.getElementById(id);
+const esc = s => (s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const short = p => p.split(/[\\/]/).filter(Boolean).pop();
+const fmt = iso => iso ? iso.slice(0,16).replace("T"," ") : "-";
+
+$("gen").textContent = fmt(DATA.generated_at);
+
+// cards
+const S = DATA.stats;
+const cards = [
+  [S.total_threads, "会话总数"], [S.active, "活跃"], [S.archived, "已归档"],
+  [S.projects, "项目"], [Object.keys(S.agents).length, "Agent"],
+];
+$("cards").innerHTML = cards.map(([v,l]) => `<div class="card"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+
+// project sidebar
+let curProject = "";
+function renderProjects() {
+  const items = [{path:"", total:DATA.threads.length, active:S.active}, ...DATA.projects];
+  $("projects").innerHTML = items.map(p =>
+    `<div class="proj ${p.path===curProject?"active":""}" data-p="${esc(p.path)}">
+       <span class="name">${p.path ? esc(short(p.path)) : "全部项目"}</span>
+       <span class="n">${p.total}</span>
+     </div>`).join("");
+  document.querySelectorAll(".proj").forEach(el =>
+    el.onclick = () => { curProject = el.dataset.p; renderProjects(); apply(); });
+}
+
+// filter selects
+[...new Set(DATA.threads.map(t => t.agent_id))].sort().forEach(a => {
+  const o = document.createElement("option"); o.value = a; o.textContent = a; $("fAgent").appendChild(o);
+});
+[...new Set(DATA.threads.map(t => (t.updated_at||"").slice(0,7)).filter(Boolean))].sort().reverse().forEach(m => {
+  const o = document.createElement("option"); o.value = m; o.textContent = m; $("fMonth").appendChild(o);
+});
+
+function apply() {
+  const q = $("q").value.trim().toLowerCase();
+  const agent = $("fAgent").value, arch = $("fArch").value, month = $("fMonth").value;
+  const rows = DATA.threads.filter(t => {
+    if (curProject && !t.projects.some(p => p === curProject)) return false;
+    if (agent && t.agent_id !== agent) return false;
+    if (arch === "no" && t.archived) return false;
+    if (arch === "only" && !t.archived) return false;
+    if (month && (t.updated_at||"").slice(0,7) !== month) return false;
+    if (q && !(t.title.toLowerCase().includes(q) || t.agent_id.toLowerCase().includes(q) || t.id.toLowerCase().includes(q))) return false;
+    return true;
+  });
+  $("count").textContent = `显示 ${rows.length} / ${DATA.threads.length} 条会话`;
+  $("rows").innerHTML = rows.map(t =>
+    `<tr>
+       <td class="title" title="${esc(t.title)}">${esc(t.title || "(untitled)")}</td>
+       <td class="agent">${esc(t.agent_id)}</td>
+       <td class="projlist" title="${esc(t.projects.join(" + "))}">${t.projects.map(p => esc(short(p))).join(" + ")}</td>
+       <td class="when">${fmt(t.updated_at)}</td>
+       <td>${t.archived ? '<span class="arch">归档</span>' : ""}</td>
+     </tr>`).join("");
+}
+
+["q","fAgent","fArch","fMonth"].forEach(id => $(id).addEventListener("input", apply));
+renderProjects();
+apply();
+</script>
+</body>
+</html>
