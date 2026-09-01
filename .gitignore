@@ -12,5 +12,3 @@ pystand-lab/**/cli-debug.log
 # flet-android-lab：flet build 产物不入库
 flet-android-lab/build/
 
-# AI 会话产物不入库
-.zcode/
