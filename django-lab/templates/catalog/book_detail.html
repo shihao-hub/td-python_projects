@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}{{ book.title }} - Django Lab{% endblock %}
+
+{% block content %}
+<article class="detail">
+    <header class="detail-head">
+        <h1>{{ book.title }}</h1>
+        <div class="meta">
+            <span class="badge badge-{{ book.status|lower }}">{{ book.get_status_display }}</span>
+            <a href="{{ book.author.get_absolute_url }}">{{ book.author }}</a>
+            <span>ISBN {{ book.isbn|default:"—" }}</span>
+            <span>入库于 {{ book.created_at|date:"Y-m-d" }}</span>
+        </div>
+    </header>
+
+    <section class="detail-grid">
+        <div>
+            <h2>摘要</h2>
+            <p>{{ book.summary|default:"（暂无摘要）"|linebreaksbr }}</p>
+            {% if book.genres.all %}
+                <p class="tags">
+                    {% for genre in book.genres.all %}<span class="tag">{{ genre.name }}</span>{% endfor %}
+                </p>
+            {% endif %}
+            <h2>价格</h2>
+            <p>
+                定价 ￥{{ book.price|floatformat:2 }} ；
+                含税价 <strong>￥{{ book.price_with_tax|floatformat:2 }}</strong>
+                <small class="muted">（数据库生成列 GeneratedField 实时计算）</small>
+            </p>
+        </div>
+
+        <aside>
+            <h2>借阅</h2>
+            {% if user.is_authenticated %}
+                {% if book.is_borrowable %}
+                    <form method="post" action="{% url 'catalog:book-borrow' book.slug %}" class="form-card">
+                        {% csrf_token %}
+                        {# Django 6.0 起表单默认渲染为 <div> 结构 #}
+                        {{ borrow_form.as_div }}
+                        <button type="submit" class="btn btn-primary">借这本书</button>
+                    </form>
+                {% else %}
+                    <p class="muted">当前状态「{{ book.get_status_display }}」，暂不可借。</p>
+                    {% if book.active_borrow %}
+                        <p class="muted">在借：{{ book.active_borrow.borrower }}，应还于 {{ book.active_borrow.due_date }}。</p>
+                    {% endif %}
+                {% endif %}
+            {% else %}
+                <p><a href="{% url 'login' %}">登录</a>后即可借阅。</p>
+            {% endif %}
+        </aside>
+    </section>
+</article>
+{% endblock %}

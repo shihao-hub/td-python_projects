@@ -1,0 +1,159 @@
+{
+    "extends": "Adaptive.sublime-theme",
+    "variables": {
+        "rider_editor": "#262626",
+        "rider_ui": "#2B2D30",
+        "rider_surface": "#1E1F22",
+        "rider_hover": "#393B40",
+        "rider_selected": "#2E436E",
+        "rider_border": "#1E1F22",
+        "rider_foreground": "#BDBDBD",
+        "rider_muted": "#8B8D91",
+        "rider_accent": "#3574F0"
+    },
+    "rules": [
+        {
+            "class": "title_bar",
+            "bg": "var(rider_ui)",
+            "fg": "var(rider_foreground)",
+            "style": "dark"
+        },
+        {
+            "class": "sidebar_container",
+            "layer0.tint": "var(rider_ui)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "sidebar_tree",
+            "dark_content": true
+        },
+        {
+            "class": "sidebar_label",
+            "fg": "var(rider_foreground)"
+        },
+        {
+            "class": "sidebar_label",
+            "attributes": ["ignored"],
+            "fg": "var(rider_muted)"
+        },
+        {
+            "class": "tree_row",
+            "attributes": ["selectable", "hover"],
+            "layer0.tint": "var(rider_hover)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "tree_row",
+            "attributes": ["selected"],
+            "layer0.tint": "var(rider_selected)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "tabset_control",
+            "layer0.tint": "var(rider_surface)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "tab_control",
+            "layer0.tint": "var(rider_surface)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "tab_control",
+            "attributes": ["selected"],
+            "layer0.tint": "var(rider_editor)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "tab_label",
+            "fg": "var(rider_muted)"
+        },
+        {
+            "class": "tab_label",
+            "parents": [{"class": "tab_control", "attributes": ["selected"]}],
+            "fg": "var(rider_foreground)"
+        },
+        {
+            "class": "status_bar",
+            "layer0.tint": "var(rider_ui)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "status_label",
+            "fg": "var(rider_foreground)"
+        },
+        {
+            "class": "panel_control",
+            "layer0.tint": "var(rider_editor)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "quick_panel",
+            "layer0.tint": "var(rider_ui)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "quick_panel_row",
+            "attributes": ["selected"],
+            "layer0.tint": "var(rider_selected)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "quick_panel_label",
+            "fg": "var(rider_foreground)"
+        },
+        {
+            "class": "popup_control auto_complete_popup",
+            "layer0.tint": "var(rider_ui)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "auto_complete",
+            "layer0.tint": "var(rider_ui)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "auto_complete_label",
+            "fg": "var(rider_foreground)"
+        },
+        {
+            "class": "auto_complete_label",
+            "parents": [{"class": "auto_complete", "attributes": ["selected"]}],
+            "fg": "#FFFFFF"
+        },
+        {
+            "class": "text_line_control",
+            "layer0.tint": "var(rider_surface)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "scroll_bar_control",
+            "layer0.tint": "var(rider_surface)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "puck_control",
+            "layer0.tint": "#5A5D63",
+            "layer0.opacity": 0.7
+        },
+        {
+            "class": "puck_control",
+            "attributes": ["hover"],
+            "layer0.tint": "#6B6F76",
+            "layer0.opacity": 0.9
+        },
+        {
+            "class": "tool_tip_control",
+            "layer0.tint": "var(rider_ui)",
+            "layer0.opacity": 1.0
+        },
+        {
+            "class": "tool_tip_label",
+            "fg": "var(rider_foreground)"
+        },
+        {
+            "class": "label_control",
+            "fg": "var(rider_foreground)"
+        }
+    ]
+}

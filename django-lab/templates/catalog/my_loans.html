@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}我的借阅 - Django Lab{% endblock %}
+
+{% block content %}
+<h1>我的借阅</h1>
+<div class="table-wrap">
+    <table>
+        <thead>
+        <tr><th>图书</th><th>借出时间</th><th>应还日期</th><th>状态</th><th>操作</th></tr>
+        </thead>
+        <tbody>
+        {% now "Y-m-d" as today %}
+        {% for loan in loans %}
+            <tr>
+                <td><a href="{{ loan.book.get_absolute_url }}">{{ loan.book }}</a></td>
+                <td>{{ loan.borrowed_at|date:"Y-m-d H:i" }}</td>
+                <td>
+                    {{ loan.due_date }}
+                    {% if loan.is_overdue %}<span class="badge badge-retired">已逾期</span>{% endif %}
+                </td>
+                <td>
+                    {% if loan.is_active %}<span class="badge badge-borrowed">借阅中</span>
+                    {% else %}<span class="badge badge-available">已归还 {{ loan.returned_at|date:"m-d" }}</span>{% endif %}
+                </td>
+                <td>
+                    {% if loan.is_active %}
+                        <form method="post" action="{% url 'catalog:loan-return' loan.pk %}" class="inline-form">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-small">归还</button>
+                        </form>
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="5" class="empty">还没有借阅记录，去<a href="{% url 'catalog:books' %}">书库</a>逛逛。</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

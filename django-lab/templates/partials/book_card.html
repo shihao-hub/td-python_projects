@@ -1,0 +1,14 @@
+{# 可复用的图书卡片 partial：列表 / 搜索 / 作者详情 / 看板共用（DRY） #}
+<article class="card">
+    <div class="card-head">
+        <span class="badge badge-{{ book.status|lower }}">{{ book.get_status_display }}</span>
+        <span class="price">￥{{ book.price_with_tax|floatformat:2 }} <small>含税</small></span>
+    </div>
+    <h3><a href="{{ book.get_absolute_url }}">{{ book.title }}</a></h3>
+    <p class="muted">{{ book.author }} · ￥{{ book.price|floatformat:2 }}</p>
+    {% if book.genres.all %}
+        <p class="tags">
+            {% for genre in book.genres.all %}<span class="tag">{{ genre.name }}</span>{% endfor %}
+        </p>
+    {% endif %}
+</article>

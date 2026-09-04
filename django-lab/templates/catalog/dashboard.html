@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}看板 - Django Lab{% endblock %}
+
+{% block content %}
+<h1>运营看板 <small class="muted">（async 视图 + async ORM，由数据库默认值/聚合驱动）</small></h1>
+
+<div class="stat-grid">
+    <div class="stat"><span class="stat-num">{{ total_books }}</span><span class="stat-label">馆藏总数</span></div>
+    <div class="stat"><span class="stat-num">{{ available_books }}</span><span class="stat-label">可借</span></div>
+    <div class="stat"><span class="stat-num">{{ active_loans }}</span><span class="stat-label">借出中</span></div>
+    <div class="stat"><span class="stat-num">{{ total_authors }}</span><span class="stat-label">作者数</span></div>
+</div>
+
+<h2>最新入库</h2>
+<div class="book-grid">
+    {% for book in latest_books %}
+        {% include "partials/book_card.html" %}
+    {% empty %}
+        <p class="empty">暂无数据。</p>
+    {% endfor %}
+</div>
+{% endblock %}

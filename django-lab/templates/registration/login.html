@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}登录 - Django Lab{% endblock %}
+
+{% block content %}
+<div class="auth-card">
+    <h1>登录</h1>
+    {# 约定优于配置：Django 的 LoginView 自动找到 registration/login.html #}
+    <form method="post" class="form-card">
+        {% csrf_token %}
+        {{ form.as_div }}
+        <input type="hidden" name="next" value="{{ next }}">
+        <button type="submit" class="btn btn-primary">登录</button>
+    </form>
+    <p class="muted">
+        演示账号：reader@lab / reader1234（普通读者）<br>
+        管理员：admin / admin1234（/admin/ 后台）
+    </p>
+    <p class="muted">LoginRequiredMiddleware 生效中：除标注 @login_not_required 的页面外均需登录。</p>
+</div>
+{% endblock %}

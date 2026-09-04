@@ -1,0 +1,54 @@
+[project]
+name = "django-lab"
+version = "0.1.0"
+description = "用最新 Django 写的图书馆演示项目：体会 Django 的设计思想"
+requires-python = ">=3.13"
+dependencies = [
+    "dj-database-url>=3.1.2",
+    "django>=6.1.1",
+    "django-extensions>=4.1",
+    "djangorestframework>=3.18.0",
+    "pydantic-settings>=2.15.0",
+    "whitenoise>=6.12.0",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "django-debug-toolbar>=8.0.0",
+    "django-stubs>=6.1.0",
+    "mypy>=2.3.1",
+    "ruff>=0.16.5",
+]
+postgres = [
+    "psycopg[binary]>=3.3.5",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["*/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "DJ", "RUF"]
+# 中文项目允许全角标点；RUF012 对 Django Meta（ordering/constraints）与 DRF 类属性是误报
+ignore = ["RUF001", "RUF002", "RUF003", "RUF012"]
+
+[tool.mypy]
+python_version = "3.13"
+plugins = ["mypy_django_plugin.main"]
+check_untyped_defs = true
+
+[tool.django-stubs]
+django_settings_module = "config.settings"
+
+[[tool.mypy.overrides]]
+module = ["rest_framework.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["catalog.tests", "api.tests"]
+# 测试里 response.data / setUpTestData 动态属性不做严格检查
+disable_error_code = ["attr-defined"]

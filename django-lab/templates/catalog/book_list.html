@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}{{ query|default:"图书列表" }} - Django Lab{% endblock %}
+
+{% block content %}
+<h1>{% if query %}搜索「{{ query }}」的结果{% else %}图书列表{% endif %}</h1>
+
+<div class="book-grid">
+    {% for book in books %}
+        {% include "partials/book_card.html" %}
+    {% empty %}
+        <p class="empty">暂无图书。运行 <code>uv run manage.py seed_demo</code> 造一批数据。</p>
+    {% endfor %}
+</div>
+
+{% if page_obj and page_obj.has_other_pages %}
+    <nav class="pagination">
+        {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}{% if query %}&q={{ query|urlencode }}{% endif %}">上一页</a>
+        {% endif %}
+        <span>第 {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} 页</span>
+        {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}{% if query %}&q={{ query|urlencode }}{% endif %}">下一页</a>
+        {% endif %}
+    </nav>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}{{ author.full_name }} - Django Lab{% endblock %}
+
+{% block content %}
+<h1>{{ author.full_name }}</h1>
+<p class="muted">{{ author.about|default:"（暂无简介）"|linebreaksbr }}</p>
+
+<h2>作品（{{ books|length }}）</h2>
+<div class="book-grid">
+    {% for book in books %}
+        {% include "partials/book_card.html" %}
+    {% empty %}
+        <p class="empty">该作者暂无作品。</p>
+    {% endfor %}
+</div>
+{% endblock %}

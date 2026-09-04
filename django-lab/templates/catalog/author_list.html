@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}作者 - Django Lab{% endblock %}
+
+{% block content %}
+<h1>作者</h1>
+<div class="table-wrap">
+    <table>
+        <thead>
+        <tr><th>姓名</th><th>简介</th><th>作品数</th></tr>
+        </thead>
+        <tbody>
+        {% for author in authors %}
+            <tr>
+                <td><a href="{{ author.get_absolute_url }}">{{ author.full_name }}</a></td>
+                <td class="muted">{{ author.about|truncatechars:60 }}</td>
+                <td>{{ author.book_count }}</td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="3" class="empty">暂无作者。</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
