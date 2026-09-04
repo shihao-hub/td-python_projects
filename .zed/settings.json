@@ -6,6 +6,11 @@
       "language_servers": ["basedpyright", "ruff"],
       "formatter": "language_server"
     },
+    // Go 启动器项目：只开 gopls 提供 Go 跳转（配合全局 enable_language_server: false）
+    "Go": {
+      "enable_language_server": true,
+      "language_servers": ["gopls"],
+    },
   },
   // 彻底关闭 basedpyright 类型推断告警，仅分析打开文件以压低内存
   "lsp": {
