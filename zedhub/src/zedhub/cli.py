@@ -12,6 +12,7 @@ Output contract (what frontends/other tools may rely on):
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -235,3 +236,33 @@ def export_html(
         return payload, render
 
     _run(run, db, table=True)
+
+
+@app.command("export-cli")
+def export_cli(
+    out: Annotated[Optional[Path], typer.Option("--out", help="Output html file.")] = None,
+    db: DB_OPT = None,
+) -> None:
+    """Same as export, but collects data by spawning `uv run zedhub` subprocesses."""
+
+    def fetch(args: list[str]):
+        cmd = ["uv", "run", "zedhub", *args]
+        if db:
+            cmd += ["--db", str(db)]
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        if proc.returncode != 0:
+            _die(f"subprocess failed ({' '.join(args)}): {proc.stderr.strip()}")
+        return json.loads(proc.stdout)["data"]
+
+    threads = fetch(["threads", "list", "--archived", "all"])
+    projects = fetch(["projects"])
+    stats = fetch(["stats"])
+    payload = {
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "threads": threads,
+        "projects": projects,
+        "stats": stats,
+    }
+    out_path = out or Path("zedhub-demo-cli.html")
+    out_path.write_text(render_demo(json.dumps(payload, ensure_ascii=False)), encoding="utf-8")
+    print(f"wrote {out_path.resolve()} ({len(threads)} threads)")
