@@ -1,20 +1,31 @@
-# Python
+# 字节码与缓存
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# 虚拟环境
 .venv/
+venv/
+env/
 
-# .archived/pystand-lab：二进制与打包产物不入库（NOTES.md、demo/ 源码保留）
-.archived/pystand-lab/downloads/
-.archived/pystand-lab/dist/
-.archived/pystand-lab/tools/
-.archived/pystand-lab/**/cli-debug.log
+# 测试与覆盖率
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
 
-# .archived/flet-android-lab：flet build 产物不入库
-.archived/flet-android-lab/build/
+# 打包构建
+build/
+dist/
+*.egg-info/
 
-# python-launcher-go：启动器 exe 不入库（拷入各项目的改名 exe 同样被忽略）
+# 工具缓存
+.mypy_cache/
+.ruff_cache/
+
+# 可执行文件（python-launcher-go 拷入各项目的改名 exe）
 *.exe
 
-
-# ���������ļ��������Ի�����Կ������⣩
+# 敏感配置（示例文件 .env.example 保留入库）
 .env
