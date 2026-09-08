@@ -4,13 +4,13 @@
 权限、认证、限流、分页都在 settings.REST_FRAMEWORK 全局声明。
 """
 
-from typing_extensions import override
+from typing import override
 
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_not_required
 from django.db.models import Count, Q
-from django.views.decorators.csrf import ensure_csrf_cookie
 from django.http import Http404
+from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.filters import SearchFilter
@@ -21,8 +21,8 @@ from rest_framework.response import Response
 from catalog.forms import BorrowForm
 from catalog.models import Author, Book, BorrowRecord, Status
 from catalog.tasks import notify_book_returned
-from sqla_lab.session import session_scope, Session
 from sqla_lab.queries import book_by_slug
+from sqla_lab.session import session_scope
 
 from .serializers import AuthorSerializer, BookSerializer, BorrowRecordSerializer
 

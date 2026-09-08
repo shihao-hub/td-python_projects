@@ -13,7 +13,7 @@ URL 不读静态配置而是从 django.db.connection 动态解析：Django 测�
 """
 
 from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +82,7 @@ def session_factory() -> Session:
     return Session(get_engine(), expire_on_commit=False)
 
 
+@contextmanager
 def session_scope() -> Iterator[Session]:
     """「打开事务 → 提交 / 异常回滚」的惯用法，等价于 Django 的 atomic 上下文。"""
     with session_factory() as session, session.begin():

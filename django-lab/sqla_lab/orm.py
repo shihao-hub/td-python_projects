@@ -22,6 +22,7 @@ import enum
 from datetime import date, datetime
 from decimal import Decimal
 
+from django.urls import reverse
 from sqlalchemy import (
     BigInteger,
     Computed,
@@ -63,6 +64,16 @@ class Status(enum.StrEnum):
     RETIRED = "RETIRED"
 
 
+# 对照 Django TextChoices 的中文 label：get_status_display() 查这张表，
+# 让 DRF 的 BookSerializer（source="get_status_display"）无需改动即可序列化 SaBook
+STATUS_LABELS: dict[str, str] = {
+    Status.DRAFT: "草稿",
+    Status.AVAILABLE: "可借",
+    Status.BORROWED: "已借出",
+    Status.RETIRED: "已下架",
+}
+
+
 class Genre(Base):
     __tablename__ = "catalog_genre"
 
@@ -71,6 +82,10 @@ class Genre(Base):
 
     def __repr__(self) -> str:
         return f"Genre(id={self.id}, name={self.name!r})"
+
+    def __str__(self) -> str:
+        # 对齐 Django Genre.__str__ —— BookSerializer 的 StringRelatedField 依赖
+        return self.name
 
 
 class Author(Base):
@@ -100,6 +115,10 @@ class Author(Base):
 
     def __repr__(self) -> str:
         return f"Author(id={self.id}, name={self.last_name} {self.first_name})"
+
+    def __str__(self) -> str:
+        # 对齐 Django Author.__str__（"姓 名"）—— serializer 依赖的显示格式只此一处
+        return f"{self.last_name} {self.first_name}".strip()
 
 
 class Book(Base):
@@ -150,6 +169,20 @@ class Book(Base):
     @classmethod
     def is_borrowable(cls) -> object:
         return cls.status == Status.AVAILABLE
+
+    # ---- 协议兼容方法：让 DRF 的 BookSerializer（读方向鸭子类型）直接吃 SaBook ----
+
+    def get_status_display(self) -> str:
+        """对照 Django choices 自动生成的 get_status_display —— serializer 的
+        source="get_status_display" 按名调用，两个 ORM 均满足此协议。"""
+        return STATUS_LABELS.get(self.status, str(self.status))
+
+    def get_absolute_url(self) -> str:
+        """对照 Django 模型的 get_absolute_url（DRY 的 URL 单点定义）。
+
+        有趣之处：SQLAlchemy 对象调 Django 的 reverse() —— URL 命名空间
+        与 ORM 引擎无关，两套模型共享同一套路由定义。"""
+        return reverse("catalog:book-detail", args=[self.slug])
 
     def __repr__(self) -> str:
         return f"Book(id={self.id}, title={self.title!r}, status={self.status})"

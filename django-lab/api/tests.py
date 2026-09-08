@@ -3,29 +3,41 @@
 from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 
 from catalog.models import Author, Book, Status
+from sqla_lab.session import dispose_engines
 
 User = get_user_model()
 
 
-class BookApiTests(TestCase):
+class BookApiTests(TransactionTestCase):
+    """detail 接口的 retrieve 已改走 SQLAlchemy 连接（共库不共连接实验）。
+
+    Django 的 TestCase 把测试数据包在未提交的类级事务里，SQLAlchemy 的
+    独立连接读同一张表会直接锁冲突（见 sqla_lab/tests.py 的活教材）——
+    所以这里用真实提交的 TransactionTestCase，代价是每测重建数据。"""
+
     @classmethod
-    def setUpTestData(cls):
-        cls.client = APIClient()
-        cls.user = User.objects.create_user("reader", password="reader1234")
-        cls.author = Author.objects.create(first_name="Simon", last_name="Willison")
-        cls.book = Book.objects.create(
+    def setUpClass(cls):
+        super().setUpClass()
+        # 关掉 SA 连接池，否则 Windows 下测试库文件被句柄占着删不掉
+        cls.addClassCleanup(dispose_engines)
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user("reader", password="reader1234")
+        self.author = Author.objects.create(first_name="Simon", last_name="Willison")
+        self.book = Book.objects.create(
             title="Django 之道",
             slug="the-way-of-django",
-            author=cls.author,
+            author=self.author,
             price="59.00",
             status=Status.AVAILABLE,
         )
-        cls.other_book = Book.objects.create(
+        self.other_book = Book.objects.create(
             title="流畅的 Python",
             slug="fluent-python",
             author=Author.objects.create(first_name="Luciano", last_name="Ramalho"),
