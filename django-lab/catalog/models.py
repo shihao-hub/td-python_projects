@@ -178,7 +178,7 @@ class BorrowRecord(models.Model):
     returned_at = models.DateTimeField("归还时间", null=True, blank=True)
 
     class Meta:
-        verbose_name = "借阅记录"
+        verbose_name = verbose_name_plural = "借阅记录"
         ordering = ["-borrowed_at"]
         constraints = [
             # 部分唯一约束（条件索引）：同一本书同时只能有一条「未归还」记录，

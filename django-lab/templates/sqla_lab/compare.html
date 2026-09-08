@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}ORM 对照实验室 · Django Lab{% endblock %}
+
+{% block content %}
+<h1>ORM 对照实验室 <small>Django ORM × SQLAlchemy 2.0</small></h1>
+<p class="muted">
+    同一个数据库、同一份数据，两边各自查询 —— 语义对得上，结果就该一致。
+    对照写法速查表见 <code>sqla_lab/orm.py</code> 与 <code>sqla_lab/queries.py</code> 的模块注释；
+    想看两边真实 SQL，跑 <code>uv run manage.py orm_compare --sql</code>。
+</p>
+
+<div class="compare-summary">
+    {% if matched == total %}
+        <span class="badge badge-available">{{ matched }}/{{ total }} 项一致 ✓</span>
+    {% else %}
+        <span class="badge badge-retired">{{ matched }}/{{ total }} 项一致，有差异！</span>
+    {% endif %}
+</div>
+
+<section class="compare-section">
+    <h2>读路径：每条 Django 写法旁边站着等价的 SQLAlchemy</h2>
+    {% for row in rows %}
+    <article class="compare-card{% if row.match %} ok{% else %} bad{% endif %}">
+        <header>
+            <span class="compare-no">#{{ row.no }}</span>
+            <strong>{{ row.name }}</strong>
+            <code class="compare-mapping">{{ row.mapping }}</code>
+        </header>
+        <div class="compare-grid">
+            <div class="compare-side">
+                <h3>Django ORM</h3>
+                <pre>{{ row.dj_code }}</pre>
+                <p class="compare-result">{{ row.dj_result }}</p>
+            </div>
+            <div class="compare-side">
+                <h3>SQLAlchemy 2.0</h3>
+                <pre>{{ row.sa_code }}</pre>
+                <p class="compare-result">{{ row.sa_result }}</p>
+            </div>
+        </div>
+        {% if not row.match %}<p class="compare-bad">两边结果不一致，检查场景定义。</p>{% endif %}
+    </article>
+    {% endfor %}
+
+    <article class="compare-card{% if async_row.match %} ok{% else %} bad{% endif %}">
+        <header>
+            <span class="compare-no">#{{ rows|length|add:1 }}</span>
+            <strong>异步看板统计</strong>
+            <code class="compare-mapping">await acount() ↔ AsyncSession + await scalars</code>
+        </header>
+        <div class="compare-grid">
+            <div class="compare-side">
+                <h3>Django async ORM</h3>
+                <pre>total_books = await Book.objects.acount()
+available_books = await Book.objects.available().acount()
+active_loans = await BorrowRecord.objects
+    .filter(returned_at__isnull=True).acount()
+total_authors = await Author.objects.acount()</pre>
+                <p class="compare-result">{{ async_row.dj_result }}</p>
+            </div>
+            <div class="compare-side">
+                <h3>SQLAlchemy AsyncSession</h3>
+                <pre>async with AsyncSession(engine) as session:
+    stats = {
+        "total_books":
+            (await session.scalar(
+                select(func.count()).select_from(Book))) or 0,
+        ...
+    }</pre>
+                <p class="compare-result">{{ async_row.sa_result }}</p>
+            </div>
+        </div>
+    </article>
+</section>
+
+<section class="compare-section">
+    <h2>写路径：页面不执行，代码先睹为快</h2>
+    <p class="muted">
+        写场景在 <code>orm_compare</code> 命令里跑：事务内完成借阅/归还/二次借阅，
+        最后统一回滚，数据库零残留。这里只看两边写法对照。
+    </p>
+    {% for sc in write_rows %}
+    <article class="compare-card">
+        <header>
+            <span class="compare-no">#{{ sc.no }}</span>
+            <strong>{{ sc.name }}</strong>
+            <code class="compare-mapping">{{ sc.mapping }}</code>
+        </header>
+        <div class="compare-grid">
+            <div class="compare-side">
+                <h3>Django ORM</h3>
+                <pre>{{ sc.dj_code }}</pre>
+            </div>
+            <div class="compare-side">
+                <h3>SQLAlchemy 2.0</h3>
+                <pre>{{ sc.sa_code }}</pre>
+            </div>
+        </div>
+    </article>
+    {% endfor %}
+</section>
+{% endblock %}

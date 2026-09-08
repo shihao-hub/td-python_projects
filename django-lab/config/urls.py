@@ -8,6 +8,7 @@ urlpatterns = [
     # batteries included：登录/登出/密码重置视图直接 include，零代码
     path("accounts/", include("django.contrib.auth.urls")),
     path("api/", include("api.urls")),
+    path("compare/", include("sqla_lab.urls")),
     path("", include("catalog.urls")),
 ]
 

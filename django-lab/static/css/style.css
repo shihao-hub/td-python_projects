@@ -176,3 +176,40 @@ tr:last-child td { border-bottom: none; }
     padding: 18px;
     font-size: 0.85rem;
 }
+
+/* ORM 对照实验室 */
+.compare-summary { margin-bottom: 20px; }
+.compare-section { margin-top: 28px; }
+.compare-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin-bottom: 18px;
+}
+.compare-card.ok { border-left: 4px solid var(--accent); }
+.compare-card.bad { border-left: 4px solid var(--danger); }
+.compare-card header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.compare-no {
+    background: var(--primary);
+    color: #fff;
+    border-radius: 6px;
+    padding: 1px 8px;
+    font-size: 0.8rem;
+}
+.compare-mapping { font-size: 0.82rem; color: var(--muted); }
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 860px) { .compare-grid { grid-template-columns: 1fr; } }
+.compare-side h3 { margin: 0 0 6px; font-size: 0.9rem; color: var(--primary-dark); }
+.compare-side pre {
+    background: #0d1117;
+    color: #e6edf3;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 0.82rem;
+    overflow-x: auto;
+    margin: 0;
+    white-space: pre-wrap;
+}
+.compare-result { margin: 6px 0 0; font-size: 0.82rem; color: var(--muted); word-break: break-all; }
+.compare-bad { color: var(--danger); font-size: 0.85rem; margin: 8px 0 0; }

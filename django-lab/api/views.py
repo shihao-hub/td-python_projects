@@ -4,14 +4,25 @@
 权限、认证、限流、分页都在 settings.REST_FRAMEWORK 全局声明。
 """
 
+from typing_extensions import override
+
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_not_required
 from django.db.models import Count, Q
+from django.views.decorators.csrf import ensure_csrf_cookie
+from django.http import Http404
 from rest_framework import viewsets
-from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.filters import SearchFilter
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.request import Request
 from rest_framework.response import Response
 
 from catalog.forms import BorrowForm
 from catalog.models import Author, Book, BorrowRecord, Status
+from catalog.tasks import notify_book_returned
+from sqla_lab.session import session_scope, Session
+from sqla_lab.queries import book_by_slug
 
 from .serializers import AuthorSerializer, BookSerializer, BorrowRecordSerializer
 
@@ -20,11 +31,33 @@ from .serializers import AuthorSerializer, BookSerializer, BorrowRecordSerialize
 
 
 class BookViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Book.objects.select_related("author").prefetch_related("genres")
+    # slug 路由对齐页面端 /books/<slug>/，前端可以直接用 slug 定位详情
+    lookup_field = "slug"
     serializer_class = BookSerializer
+    # ?search= 全文搜索：字段集与页面端 BookQuerySet.search 保持一致
+    filter_backends = [SearchFilter]
+    search_fields = ["title", "summary", "author__first_name", "author__last_name"]
+
+    def get_queryset(self):
+        qs = Book.objects.with_relations()
+        # ?author=<pk>：作者详情页取该作者的书（两行手写，不为此引入 django-filter）
+        author = self.request.query_params.get("author")
+        if author:
+            qs = qs.filter(author_id=author)
+        return qs
+
+    @override
+    def retrieve(self, request, *args, **kwargs):
+        print("sa 重写 dj 测试")
+        slug = kwargs[self.lookup_field]          # lookup_field = "slug"
+        with session_scope() as session:          # sqla_lab.session：事务+自动关闭
+            book = book_by_slug(session, slug)
+            if book is None:
+                raise Http404                     # DRF 转成 404 响应，行为对齐 get_object()
+            return Response(self.get_serializer(book).data)
 
     @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
-    def borrow(self, request, pk=None):
+    def borrow(self, request, slug=None):
         """借书动作：直接复用页面端的 BorrowForm 校验 —— 一处定义，两端使用。"""
         book = self.get_object()
         form = BorrowForm(request.data, book=book, borrower=request.user)
@@ -66,3 +99,68 @@ class BorrowRecordViewSet(viewsets.ReadOnlyModelViewSet):
             .select_related("book", "book__author")
             .order_by("-borrowed_at")
         )
+
+    @action(detail=True, methods=["post"], url_path="return", url_name="return")
+    def give_back(self, request, pk=None):
+        """还书：POST /api/loans/{pk}/return/（url_path 避开 Python 关键字）。
+
+        与页面端 return_book 视图同一套编排：模型方法改状态（信号自动同步图书状态），
+        后台任务解耦通知 —— 归宿清晰的逻辑，两端零重复。
+        """
+        record = self.get_object()  # queryset 已限定本人，他人记录直接 404
+        record.mark_returned()
+        notify_book_returned.enqueue(record.book.title, str(record.borrower))
+        serializer = self.get_serializer(record)
+        return Response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
+# Session 认证端点：SPA 与后端同源（开发期 Vite 代理 /api），继续复用框架的
+# SessionAuthentication + CSRF。me 挂 ensure_csrf_cookie，前端启动时调用一次
+# 即可拿到 csrftoken cookie，后续 POST 统一带 X-CSRFToken 头。
+# 注意：全局默认权限是 IsAuthenticatedOrReadOnly（POST 视为写操作），
+# 这三个端点必须显式 AllowAny，否则匿名登录请求会被自己拦在门外。
+# ---------------------------------------------------------------------------
+
+
+@login_not_required
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def login_view(request: Request) -> Response:
+    user = authenticate(
+        request,
+        username=request.data.get("username", ""),
+        password=request.data.get("password", ""),
+    )
+    if user is None:
+        return Response({"detail": "用户名或密码错误。"}, status=400)
+    login(request, user)
+    return Response(
+        {"id": user.pk, "username": user.username, "is_staff": getattr(user, "is_staff", False)}
+    )
+
+
+@login_not_required
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def logout_view(request: Request) -> Response:
+    logout(request)
+    return Response(status=204)
+
+
+@login_not_required
+@api_view(["GET"])
+@permission_classes([AllowAny])
+@ensure_csrf_cookie
+def me_view(request: Request) -> Response:
+    user = request.user
+    if not user.is_authenticated:
+        return Response({"authenticated": False})
+    return Response(
+        {
+            "authenticated": True,
+            "id": user.pk,
+            "username": getattr(user, "username", ""),
+            "is_staff": getattr(user, "is_staff", False),
+        }
+    )
