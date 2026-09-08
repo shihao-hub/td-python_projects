@@ -1,0 +1,21 @@
+[project]
+name = "archery-mcp"
+version = "0.4.0"
+description = "Archery SQL 查询 MCP 工具：自动登录 + 会话自愈 + 只读查询，供任意 MCP 客户端与 CLI 使用"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "mcp>=1.2",
+]
+
+[project.scripts]
+archery-sql-mcp = "archery_sql_mcp:main"
+
+[build-system]
+requires = ["uv_build>=0.12.4,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "archery_sql_mcp"
+module-root = ""
