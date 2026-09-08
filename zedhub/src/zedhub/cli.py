@@ -1,4 +1,4 @@
-﻿"""zedhub 鈥?read-only CLI over Zed's agent session database.
+﻿"""zedhub — read-only CLI over Zed's agent session database.
 
 Output contract (what frontends/other tools may rely on):
 - Successful commands print a single JSON object to stdout:
@@ -7,6 +7,14 @@ Output contract (what frontends/other tools may rely on):
 - datetimes are local-time ISO strings.
 - Exit codes: 0 ok (empty results included), 1 runtime error, 2 usage error.
 - Errors go to stderr as plain text; nothing is printed to stdout on failure.
+
+Programmatic access (standard protocols, no custom envelope knowledge needed):
+- `zedhub rpc`   JSON-RPC 2.0 over line-delimited stdio (one request per
+                 line, one response per line). Method table and error codes:
+                 docs/python_projects/zedhub/protocol.md.
+- `zedhub mcp`   MCP stdio server exposing the same queries as tools.
+Both share the method registry in api.py; payload shapes are identical to
+the "data" field of the JSON envelope above.
 """
 
 from __future__ import annotations
@@ -21,7 +29,8 @@ from typing import Annotated, Optional
 
 import typer
 
-from .core.model import Overview, ProjectStat, Thread
+from .api import dump_projects, dump_threads
+from .core.model import Overview, Thread
 from .core.repo import SchemaError, ZedDb
 from .core.service import ArchivedFilter, NotFoundError, Service
 from .core.snapshot import SnapshotError, open_snapshot
@@ -64,16 +73,8 @@ def _parse_date(value: str, flag: str) -> datetime:
 
 
 def _localize_threads(items: list[Thread]) -> list[dict]:
-    def loc(t: Thread) -> Thread:
-        return t.model_copy(
-            update={
-                "created_at": t.created_at.astimezone() if t.created_at else None,
-                "updated_at": t.updated_at.astimezone() if t.updated_at else None,
-                "interacted_at": t.interacted_at.astimezone() if t.interacted_at else None,
-            }
-        )
-
-    return [loc(t).model_dump(mode="json") for t in items]
+    # 本地时区序列化的唯一实现在 api.py,CLI 信封与 RPC/MCP 共用
+    return dump_threads(items)
 
 
 def _run(fn, db: Path | None = None, table: bool = False) -> None:
@@ -176,20 +177,17 @@ def projects(db: DB_OPT = None, table: TABLE_OPT = False) -> None:
     """Per-folder project statistics."""
 
     def run(svc: Service):
-        def loc(p: ProjectStat) -> ProjectStat:
-            return p.model_copy(update={"last_activity": p.last_activity.astimezone() if p.last_activity else None})
-
-        items = [loc(p) for p in svc.projects()]
+        items = svc.projects()
 
         def render(items: list[dict]):
             if not items:
                 print("(no projects)")
                 return
-            print(f"{'ACTIVE':>6}  {'ARCH':>4}  {'LAST ACTIVITY':<16}  PATH")
+            print(f"{'ACTIVE':>6}  {'ARCH':<4}  {'LAST ACTIVITY':<16}  PATH")
             for p in items:
                 print(f"{p['active']:>6}  {p['archived']:>4}  {_fmt_dt(p['last_activity']):<16}  {p['path']}")
 
-        return [p.model_dump(mode="json") for p in items], render
+        return dump_projects(items), render
 
     _run(run, db, table)
 
@@ -203,6 +201,29 @@ def stats(db: DB_OPT = None) -> None:
         return ov.model_dump(mode="json"), None
 
     _run(run, db)
+
+
+# -- programmatic protocols -------------------------------------------------
+
+
+@app.command("rpc")
+def rpc_cmd(db: DB_OPT = None) -> None:
+    """JSON-RPC 2.0 over line-delimited stdio (one request per line).
+
+    Single piped line = one-shot call (EOF ends the process); multiple
+    lines = long-lived session. Each request snapshots the database fresh.
+    """
+    from .rpc import serve
+
+    serve(db)
+
+
+@app.command("mcp")
+def mcp_cmd(db: DB_OPT = None) -> None:
+    """MCP stdio server exposing the queries as tools (for AI clients)."""
+    from .mcp_server import serve_mcp
+
+    serve_mcp(db)
 
 
 # -- export ----------------------------------------------------------------
@@ -227,10 +248,7 @@ def export_html(
         payload = {
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "threads": _localize_threads(threads),
-            "projects": [
-                p.model_copy(update={"last_activity": p.last_activity.astimezone() if p.last_activity else None}).model_dump(mode="json")
-                for p in svc.projects()
-            ],
+            "projects": dump_projects(svc.projects()),
             "stats": svc.stats().model_dump(mode="json"),
         }
         return payload, render

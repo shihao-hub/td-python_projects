@@ -1,7 +1,7 @@
 # HANDOFF.md — zedhub 交接文档
 
 > 写给接手的 AI 或人。目标：读完即可理解项目全貌、约束与待办，不需要重新考古。
-> 最后更新：2026-09-02（M1+M2 完成交付时）。
+> 最后更新：2026-09-06（新增 RPC/MCP 协议入口时）。
 > 本项目位于 `python_projects` 多项目仓库内（结构约定见上级目录的 AGENTS.md：子项目隔离、单一 git 仓库、只在子目录内工作）。
 > `C:\WorkingProjects\zedhub` 是迁移前的旧副本，勿在那里继续开发。
 
@@ -36,6 +36,9 @@
 ```
 src/zedhub/
 ├── cli.py                # typer 入口。文件头 docstring = 输出契约，改动前先读
+├── api.py                # 方法注册表+方法元数据 = 三端(CLI/RPC/MCP)契约的单一事实源
+├── rpc.py                # `zedhub rpc`：JSON-RPC 2.0 over line-delimited stdio(含 rpc.discover)
+├── mcp_server.py         # `zedhub mcp`：MCP stdio server（依赖官方 mcp SDK 2.x）
 ├── core/
 │   ├── snapshot.py       # open_snapshot() 上下文管理器：复制三件套→yield→清理
 │   ├── model.py          # pydantic 模型 = 公共 JSON 契约；blob/时间/路径解析都在这
@@ -51,6 +54,14 @@ src/zedhub/
 - 退出码：0 成功（含空结果）/ 1 运行错误（stderr）/ 2 参数错误
 - `--table` 为人类可读输出，格式不稳定，前端别依赖
 
+**程序化协议契约（2026-09-06 新增，同样勿破坏）**：
+- `zedhub rpc`：JSON-RPC 2.0，stdin 每行一个 request、stdout 每行一个 response；不支持 batch/位置参数；notification 不回包；错误码 -32700/-32600/-32601/-32602/-32603/-32000(快照/schema)/-32001(NotFound)
+- `rpc.discover` 保留方法：返回 OpenRPC 风格 descriptor（方法/参数 schema/描述），由 api.METHOD_SPECS 生成；纯元数据**不走快照路径**，数据库缺失也可用
+- `zedhub mcp`：MCP stdio server，4 个 tool 与 RPC 方法一一对应；域异常统一转 ToolError 透出原因
+- 两端共享 `api.py` 注册表；payload 形状 = CLI 信封的 `data` 字段，三端不漂移
+- 方法表与客户端接入配置：父仓库 `docs/python_projects/zedhub/protocol.md`
+- 已知 SDK 行为：mcp 2.x 对 list 返回值 structured_content 包成 `{"result": [...]}`，TextContent 只含首个元素——消费侧用 structured_content（测试 payload() helper 已处理）
+
 **已知坑（都踩过，别再踩）**：
 1. PowerShell 里 python `-c` 内联引号必炸 → 写 .py 文件再执行
 2. GBK 控制台看 UTF-8 输出乱码 → `| Out-File -Encoding utf8` 落盘再看
@@ -60,9 +71,9 @@ src/zedhub/
 ## 验证与工作流
 
 ```powershell
-cd C:\WorkingProjects\python_projects\zedhub
+cd C:\WorkingProjects\language_projects\python_projects\zedhub
 uv sync                                    # 装依赖（首次/换机/目录迁移后）
-uv run pytest tests -q                     # 9 个用例，合成 fixture，绝不碰真实库
+uv run pytest tests -q                     # 24 个用例，合成 fixture，绝不碰真实库
 uv run zedhub threads list --table --limit 10   # 真实库冒烟（快照只读，Zed 开着也安全）
 uv run zedhub export --out demo.html       # 重新生成 demo 页
 ```
@@ -72,7 +83,7 @@ uv run zedhub export --out demo.html       # 重新生成 demo 页
 ## 路线图（用户已确认的后续）
 
 - **M3 写操作**（下一步）：`archive <id> [--undo]`、`rename <id> <title>`、路径归还/迁移。铁律照抄 `~/.agents/skills/sh-zed-session-db`：Zed 必须完全退出（`Get-Process` 检查）→ 带时间戳备份三件套 → 参数化 SQL → `PRAGMA wal_checkpoint(TRUNCATE)` → 重连校验
-- **M4（可选）**：`serve` 子命令，FastAPI 包同一 core，localhost HTTP + SSE。浏览器无法直接调 CLI，这是 serve 存在的理由
+- **M4（可选）**：`serve` 子命令，FastAPI 包同一 core，localhost HTTP + SSE。浏览器无法直接调 CLI/MCP，这是 serve 仍存在的理由
 - 长期边界：本库只是**元数据索引**，会话正文在外部 agent 自己的存储（opencode: `~/.local/share/opencode`，靠 `session_id` 对应）。"删除"要两头一起处理才有意义
 
 ## 相关外部资产
