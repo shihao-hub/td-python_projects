@@ -5,12 +5,14 @@ description = "用最新 Django 写的图书馆演示项目：体会 Django 的�
 requires-python = ">=3.13"
 dependencies = [
     "aiosqlite>=0.21.0",
+    "colorama>=0.4.6",
     "dj-database-url>=3.1.2",
     "django>=6.1.1",
     "django-extensions>=4.1",
     "djangorestframework>=3.18.0",
     "pydantic-settings>=2.15.0",
     "sqlalchemy>=2.0.43",
+    "structlog>=26.1.0",
     "whitenoise>=6.12.0",
 ]
 

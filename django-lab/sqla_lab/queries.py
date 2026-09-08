@@ -218,6 +218,7 @@ def all_genre_names(session: Session) -> list[str]:
     stmt = select(Genre.name).order_by(Genre.name)
     return list(session.scalars(stmt))
 
+
 def book_by_slug(session: Session, slug: str) -> Book | None:
     """对照 `Book.objects.with_relations().get(slug=...)`：
     DoesNotExist ↔ scalar() 返回 None；单条也要 eager loading。"""

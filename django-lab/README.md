@@ -66,9 +66,9 @@ SELECT "catalog_book"."id", "catalog_book"."title", ... FROM "catalog_book"
 真正的问题是**默认取全部列** —— 只要 2 列也全查。这是刻意取舍：完整实例才能安全调用 fat models 的方法（`is_borrowable`），不踩延迟加载陷阱。需要省列时显式声明：
 
 ```python
-Book.objects.only("title", "status")     # 只要这几列
-Book.objects.defer("summary")            # 排除大字段
-Book.objects.values("title", "status")   # 不要模型实例，直接拿字典
+Book.objects.only("title", "status")  # 只要这几列
+Book.objects.defer("summary")  # 排除大字段
+Book.objects.values("title", "status")  # 不要模型实例，直接拿字典
 ```
 
 ### 架构上如何限制随意开发

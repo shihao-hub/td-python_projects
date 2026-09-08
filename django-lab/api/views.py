@@ -6,6 +6,7 @@
 
 from typing import override
 
+import structlog
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_not_required
 from django.db.models import Count, Q
@@ -25,6 +26,8 @@ from sqla_lab.queries import book_by_slug
 from sqla_lab.session import session_scope
 
 from .serializers import AuthorSerializer, BookSerializer, BorrowRecordSerializer
+
+logger = structlog.get_logger(__name__)
 
 # 注意：DRF 3.18 起 ViewSet 会主动豁免 Django 的 LoginRequiredMiddleware，
 # 访问控制交回 DRF 权限体系（settings.REST_FRAMEWORK + 各视图的 permission_classes）。
@@ -48,12 +51,13 @@ class BookViewSet(viewsets.ReadOnlyModelViewSet):
 
     @override
     def retrieve(self, request, *args, **kwargs):
-        print("sa 重写 dj 测试")
-        slug = kwargs[self.lookup_field]          # lookup_field = "slug"
-        with session_scope() as session:          # sqla_lab.session：事务+自动关闭
+        # detail 接口走 sqlalchemy 查询（对比 ORM 的演示路径），留一条日志便于观察
+        logger.info("retrieve_via_sqlalchemy", slug=kwargs[self.lookup_field])
+        slug = kwargs[self.lookup_field]  # lookup_field = "slug"
+        with session_scope() as session:  # sqla_lab.session：事务+自动关闭
             book = book_by_slug(session, slug)
             if book is None:
-                raise Http404                     # DRF 转成 404 响应，行为对齐 get_object()
+                raise Http404  # DRF 转成 404 响应，行为对齐 get_object()
             return Response(self.get_serializer(book).data)
 
     @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
