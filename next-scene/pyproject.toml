@@ -1,0 +1,24 @@
+[project]
+name = "next-scene"
+version = "0.1.0"
+description = "下一场：帮卡文的小说作者把卡点推进成下一场戏"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+    "nicegui>=3.16",
+]
+
+[project.scripts]
+next-scene = "next_scene.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/next_scene"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
