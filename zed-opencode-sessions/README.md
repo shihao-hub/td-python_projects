@@ -26,8 +26,14 @@ uv sync
 ### CLI 模式
 
 ```bash
-# 列出项目下的会话
-uv run zoc list --project language_projects
+# 列出项目下的会话（project 为位置参数，不支持 --project）
+uv run zoc list language_projects
+
+# 包含已归档会话
+uv run zoc list language_projects --archived
+
+# 输出 JSON 格式
+uv run zoc list language_projects --json
 
 # 显示会话详情
 uv run zoc show ses_xxx
