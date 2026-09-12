@@ -1,0 +1,86 @@
+"""subprocess 调用 lark-cli 发送飞书机器人私聊消息。
+
+不引入飞书 SDK，直接复用现成 CLI：
+lark-cli im +messages-send --as bot --user-id <open_id> --markdown <msg>
+
+用 bot 身份而非 user：user token 会过期，bot 是应用凭证，适合无人值守定时任务。
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import shutil
+import subprocess
+
+logger = logging.getLogger("todo_notify")
+
+# 收件人 open_id（张世豪）
+RECIPIENT_OPEN_ID = "ou_7ad1912240ad66760cb0efa360eb8711"
+
+
+class NotifyError(RuntimeError):
+    """飞书发送失败。"""
+
+
+def _resolve_lark_cli() -> str:
+    """解析 lark-cli 完整路径。
+
+    lark-cli 是 npm shim（lark-cli.cmd），Windows CreateProcess 不会自动
+    搜索 PATHEXT 后缀，必须用 shutil.which 解析到 .cmd 才能启动。
+    """
+    exe = shutil.which("lark-cli")
+    if exe is None:
+        raise NotifyError("未找到 lark-cli，请确认已安装且在 PATH 中")
+    return exe
+
+
+def build_command(markdown: str) -> list[str]:
+    """构造 lark-cli 发送命令（dry-run 展示与实发共用）。"""
+    return [
+        _resolve_lark_cli(),
+        "im",
+        "+messages-send",
+        "--as",
+        "bot",
+        "--user-id",
+        RECIPIENT_OPEN_ID,
+        "--markdown",
+        markdown,
+    ]
+
+
+def send_lark(markdown: str) -> str:
+    """发送 markdown 消息，成功返回 message_id，失败抛 NotifyError。
+
+    从 Python 以列表参数经 CreateProcess 调用 lark-cli，
+    不经过 Git Bash 的 MSYS 路径转义，无引号歧义问题。
+    """
+    cmd = build_command(markdown)
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        logger.error("启动 lark-cli 失败: %s", exc)
+        raise NotifyError(f"启动 lark-cli 失败: {exc}") from exc
+    if result.returncode != 0:
+        logger.error("lark-cli 退出码 %s，stderr: %s", result.returncode, result.stderr)
+        raise NotifyError(f"lark-cli 退出码 {result.returncode}: {result.stderr.strip()}")
+
+    # 成功响应 stdout 是含 message_id 的 JSON
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        logger.error("lark-cli stdout 非 JSON: %s", result.stdout)
+        raise NotifyError("lark-cli 返回内容无法解析为 JSON") from None
+
+    message_id = payload.get("message_id") or payload.get("data", {}).get("message_id")
+    if not message_id:
+        logger.error("lark-cli 响应缺少 message_id: %s", result.stdout)
+        raise NotifyError(f"lark-cli 响应缺少 message_id: {result.stdout.strip()}")
+    return str(message_id)
