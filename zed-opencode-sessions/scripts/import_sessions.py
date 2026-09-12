@@ -384,21 +384,16 @@ def import_sessions(
             zed_con.execute(
                 """INSERT INTO sidebar_threads 
                    (thread_id, session_id, agent_id, title, title_override, 
-                    folder_paths, folder_paths_order, archived, created_at, 
-                    updated_at, interacted_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    folder_paths, folder_paths_order, main_worktree_paths, main_worktree_paths_order,
+                    archived, created_at, updated_at, interacted_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    new_tid,
-                    new_sid,
-                    t["agent_id"],
-                    t["title"],
-                    t["title_override"],
-                    target_dir,  # 新的 folder_paths
-                    "0",  # folder_paths_order
-                    t["archived"],
-                    t["created_at"],
-                    t["updated_at"],
-                    t["interacted_at"],
+                    new_tid, new_sid, t["agent_id"], t["title"], t["title_override"],
+                    target_dir,  # folder_paths
+                    "0",         # folder_paths_order
+                    target_dir,  # main_worktree_paths（补上这一列）
+                    "0",         # main_worktree_paths_order（补上这一列）
+                    t["archived"], t["created_at"], t["updated_at"], t["interacted_at"],
                 )
             )
         

@@ -91,12 +91,9 @@ def main() -> None:
         # 直接查询数据库
         # 需要导入项目模块
         try:
-            from zoc.core.model import OpencodeRepo
-            from zoc.mcp_server import _session_content_to_dict
+            from zoc.tools import get_session_content
 
-            repo = OpencodeRepo()
-            content = repo.get_session_content(args.session_id)
-            data = _session_content_to_dict(content)
+            data = get_session_content(args.session_id)
         except ImportError:
             print("Error: Cannot import zoc module. Please run from project root with 'uv run'.", file=sys.stderr)
             sys.exit(1)

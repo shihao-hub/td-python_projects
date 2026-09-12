@@ -171,6 +171,13 @@ uv run python scripts/import_sessions.py sessions_archive_language_projects.db -
 
 ---
 
+## 代码结构
+
+- `src/zoc/tools.py`：MCP tool 的唯一实现（`list_sessions` / `get_session_content`），CLI 与 MCP 共用同一批函数
+- `src/zoc/mcp_server.py`：MCP 注册与 stdio 传输层，tool 闭包只做委托 + ToolError 翻译
+- `src/zoc/cli.py`：CLI 薄壳，直接调用 `tools.py`，负责表格/人类可读渲染
+- `src/zoc/core/`：SQLite 访问层（`ZedRepo` / `OpencodeRepo`）与快照管理
+
 ## 数据源
 
 - **Zed 数据库**：`%LOCALAPPDATA%\Zed\db\0-stable\db.sqlite`

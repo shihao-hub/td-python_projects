@@ -1,13 +1,15 @@
-"""MCP stdio server for querying Zed + OpenCode sessions."""
+"""MCP stdio server for querying Zed + OpenCode sessions.
+
+tool 实现统一在 tools.py（CLI 与 MCP 共用），本模块只负责注册与协议适配。
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from .core.errors import NotFoundError, SchemaError, ZocError
-from .core.model import OpencodeRepo, ZedRepo
+from . import tools
+from .core.errors import ZocError
 from .core.snapshot import SnapshotError
-from .schema import SessionContent, Thread
 
 
 def build_server(
@@ -41,13 +43,7 @@ def build_server(
             会话摘要列表，每项包含 thread_id, session_id, title, updated_at 等
         """
         try:
-            repo = ZedRepo(zed_db)
-            threads = repo.list_threads(
-                project=project, agent="opencode", archived=archived
-            )
-
-            # 转 JSON-ready dict
-            return [_thread_to_dict(t) for t in threads]
+            return tools.list_sessions(project, archived, zed_db=zed_db)
         except (ZocError, SnapshotError) as e:
             raise ToolError(f"list_sessions failed: {e}") from e
 
@@ -65,11 +61,7 @@ def build_server(
             完整会话内容，包含 session 元数据和 messages 列表
         """
         try:
-            repo = OpencodeRepo(opencode_db)
-            content = repo.get_session_content(session_id)
-
-            # 转 JSON-ready dict
-            return _session_content_to_dict(content)
+            return tools.get_session_content(session_id, opencode_db=opencode_db)
         except (ZocError, SnapshotError) as e:
             raise ToolError(f"get_session_content failed: {e}") from e
 
@@ -82,53 +74,3 @@ def serve(
 ) -> None:
     """MCP stdio server 入口"""
     build_server(zed_db, opencode_db).run(transport="stdio")
-
-
-# ========== 序列化辅助函数 ==========
-
-
-def _thread_to_dict(t: Thread) -> dict:
-    """Thread 对象转 JSON-ready dict"""
-    return {
-        "thread_id": t.id,
-        "session_id": t.session_id,
-        "title": t.title,
-        "projects": t.projects,
-        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
-        "archived": t.archived,
-    }
-
-
-def _session_content_to_dict(content: SessionContent) -> dict:
-    """SessionContent 对象转 JSON-ready dict"""
-    return {
-        "session": {
-            "id": content.session.id,
-            "title": content.session.title,
-            "directory": content.session.directory,
-            "version": content.session.version,
-            "agent": content.session.agent,
-            "model": content.session.model,
-            "time_created": content.session.time_created,
-        },
-        "messages": [
-            {
-                "id": msg.id,
-                "role": msg.role,
-                "agent": msg.agent,
-                "modelID": msg.modelID,
-                "time_created": msg.time_created,
-                "parts": [
-                    {
-                        "id": part.id,
-                        "type": part.type,
-                        "text": part.text,
-                        "time_created": part.time_created,
-                    }
-                    for part in msg.parts
-                ],
-            }
-            for msg in content.messages
-        ],
-    }
