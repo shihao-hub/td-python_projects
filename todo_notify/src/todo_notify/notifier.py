@@ -1,7 +1,7 @@
 """subprocess 调用 lark-cli 发送飞书机器人私聊消息。
 
 不引入飞书 SDK，直接复用现成 CLI：
-lark-cli im +messages-send --as bot --user-id <open_id> --markdown <msg>
+lark-cli im +messages-send --as bot --user-id <open_id> --msg-type post --content <post JSON>
 
 用 bot 身份而非 user：user token 会过期，bot 是应用凭证，适合无人值守定时任务。
 """
@@ -35,6 +35,21 @@ def _resolve_lark_cli() -> str:
     return exe
 
 
+def build_post_content(markdown: str) -> str:
+    """把 markdown 包装为飞书 post 内容 JSON（单行字符串）。
+
+    不能用 --markdown 直传多行文本：lark-cli 是 npm shim，参数经 cmd.exe
+    中转时真实换行符会被当作命令分隔符截断，只有首行能送达。
+    改用 --content 传 JSON：换行在 JSON 里是转义序列 \\n（两个字符），
+    命令行上始终是单行字符串。ensure_ascii=True 进一步保证纯 ASCII 传参。
+    首行（统计头）用作 post 标题，手机通知预览显示它。
+    """
+    lines = markdown.splitlines()
+    title = lines[0].strip() if lines else "待办提醒"
+    payload = {"zh_cn": {"title": title, "content": [[{"tag": "md", "text": markdown}]]}}
+    return json.dumps(payload, ensure_ascii=True)
+
+
 def build_command(markdown: str) -> list[str]:
     """构造 lark-cli 发送命令（dry-run 展示与实发共用）。"""
     return [
@@ -45,8 +60,10 @@ def build_command(markdown: str) -> list[str]:
         "bot",
         "--user-id",
         RECIPIENT_OPEN_ID,
-        "--markdown",
-        markdown,
+        "--msg-type",
+        "post",
+        "--content",
+        build_post_content(markdown),
     ]
 
 

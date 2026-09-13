@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -11,7 +12,13 @@ from types import SimpleNamespace
 import pytest
 
 from todo_notify.applog import get_log_dir
-from todo_notify.notifier import RECIPIENT_OPEN_ID, NotifyError, build_command, send_lark
+from todo_notify.notifier import (
+    RECIPIENT_OPEN_ID,
+    NotifyError,
+    build_command,
+    build_post_content,
+    send_lark,
+)
 from todo_notify.scheduler import SCHEDULES, SchedulerError, install, uninstall
 
 FAKE_LARK_CLI = "C:/fake/lark-cli.cmd"
@@ -30,13 +37,33 @@ def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> Simpl
 # ---------- notifier ----------
 
 
+def test_build_post_content_escapes_newlines() -> None:
+    """post JSON 单行、换行为转义序列、首行作标题——规避 cmd.exe 换行截断。"""
+    content = build_post_content("标题行\n\n正文一\n正文二")
+    assert "\n" not in content  # 真实换行不得出现在命令行参数里
+    payload = json.loads(content)
+    block = payload["zh_cn"]
+    assert block["title"] == "标题行"
+    assert block["content"][0][0]["tag"] == "md"
+    assert block["content"][0][0]["text"] == "标题行\n\n正文一\n正文二"
+
+
+def test_build_post_content_ascii_only() -> None:
+    """ensure_ascii 保证命令行参数纯 ASCII，规避 cmd.exe 特殊字符问题。"""
+    content = build_post_content("📋 待办提醒\n\n中文【内容】⚠️")
+    assert content.isascii()
+
+
 def test_build_command_arguments() -> None:
-    """命令参数完整：which 解析的完整路径、bot 身份、收件人 open_id、markdown 载荷。"""
-    cmd = build_command("你好")
+    """命令参数完整：which 解析的完整路径、bot 身份、post JSON 载荷。"""
+    cmd = build_command("你好\n\n正文")
     assert cmd[0] == FAKE_LARK_CLI
     assert cmd[1:6] == ["im", "+messages-send", "--as", "bot", "--user-id"]
     assert cmd[6] == RECIPIENT_OPEN_ID
-    assert cmd[-2:] == ["--markdown", "你好"]
+    assert cmd[7:10] == ["--msg-type", "post", "--content"]
+    payload = json.loads(cmd[10])
+    assert payload["zh_cn"]["title"] == "你好"
+    assert payload["zh_cn"]["content"][0][0]["text"] == "你好\n\n正文"
 
 
 def test_build_command_lark_cli_missing(monkeypatch: pytest.MonkeyPatch) -> None:
