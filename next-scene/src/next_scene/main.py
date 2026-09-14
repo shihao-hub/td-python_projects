@@ -1,10 +1,19 @@
 import json
 import os
+from pathlib import Path
 
-from nicegui import app, ui
+# 数据目录规范：会话存储统一放 %APPDATA%\language_projects\next-scene\。
+# 必须在 import nicegui 之前设置（NiceGUI 的 Storage.path 在 import 时求值）。
+_appdata = os.environ.get("APPDATA")
+_base = Path(_appdata) / "language_projects" if _appdata else Path.home() / ".language_projects"
+_storage_dir = _base / "next-scene"
+_storage_dir.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("NICEGUI_STORAGE_PATH", str(_storage_dir))
 
-from next_scene.llm import LLMError, suggest_directions, write_scene
-from next_scene.samples import SAMPLES
+from nicegui import app, ui  # noqa: E402
+
+from next_scene.llm import LLMError, suggest_directions, write_scene  # noqa: E402
+from next_scene.samples import SAMPLES  # noqa: E402
 
 MAX_PREVIOUS_CHARS = 5000
 

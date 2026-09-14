@@ -22,7 +22,7 @@
 
 - Python + [NiceGUI](https://nicegui.io) 3.16（纯 Python Web UI）
 - httpx 异步调用 OpenAI 兼容的 Chat Completions 接口（默认智谱 GLM）
-- 无数据库：工作内容通过 NiceGUI 的浏览器会话存储（`app.storage.user`）持久化到 `.nicegui/` 目录
+- 无数据库：工作内容通过 NiceGUI 的浏览器会话存储（`app.storage.user`）持久化到 `%APPDATA%\language_projects\next-scene\`（取不到 APPDATA 回退 `~/.language_projects/next-scene/`）
 - 模型接入集中在 `llm.py`（两个函数：`suggest_directions` / `write_scene`），UI 不感知服务商
 
 ```
