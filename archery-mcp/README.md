@@ -14,4 +14,4 @@ uv run archery-sql-mcp redis "scan 0 match xxx* count 100"
 uv run archery-sql-mcp                  # MCP stdio server 模式
 ```
 
-配置复用 `~/.archery-mcp/config.json`（首次可用 `uv run archery-sql-mcp init` 初始化）。
+配置存于 `%APPDATA%\language_projects\archery-mcp\config.json`（取不到 APPDATA 回退 `~/.language_projects/archery-mcp/`；首次可用 `uv run archery-sql-mcp init` 初始化，`ARCHERY_CONFIG_DIR` 可整体改根目录）。

@@ -32,7 +32,15 @@ import httpx
 VERSION = "0.4.0"
 
 # ── 配置文件与会话缓存位置（可用 ARCHERY_CONFIG_DIR 整体改根目录） ──────────
-_CONFIG_DIR = Path(os.environ.get("ARCHERY_CONFIG_DIR", str(Path.home() / ".archery-mcp")))
+# 默认：%APPDATA%\language_projects\archery-mcp\，取不到 APPDATA 回退 ~/.language_projects/archery-mcp/
+def _default_config_dir() -> Path:
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "language_projects" / "archery-mcp"
+    return Path.home() / ".language_projects" / "archery-mcp"
+
+
+_CONFIG_DIR = Path(os.environ.get("ARCHERY_CONFIG_DIR", str(_default_config_dir())))
 CONFIG_FILE = Path(os.environ.get("ARCHERY_CONFIG", str(_CONFIG_DIR / "config.json")))
 SESSION_FILE = _CONFIG_DIR / "session.json"
 
