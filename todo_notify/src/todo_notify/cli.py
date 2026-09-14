@@ -21,10 +21,7 @@ from pathlib import Path
 
 import typer
 
-from .notifier import NotifyError, build_command, send_lark
-from .report import render_json, render_lark, render_text, total_open
-from .scheduler import SchedulerError, install, uninstall
-from .scanner import scan
+from . import notifier, report, scheduler, scanner
 
 # 默认待办目录
 DEFAULT_TODO_DIR = Path(r"D:\Users\todo")
@@ -80,32 +77,32 @@ def main(
         _print(f"待办目录不存在: {todo_dir}", file=sys.stderr)
         raise typer.Exit(code=1)
 
-    reports = scan(todo_dir)
-    logger.info("扫描 %s：%d 个文件，%d 条未完成", todo_dir, len(reports), total_open(reports))
+    reports = scanner.scan(todo_dir)
+    logger.info("扫描 %s：%d 个文件，%d 条未完成", todo_dir, len(reports), report.total_open(reports))
 
     if json_output:
-        _print(render_json(reports, todo_dir))
+        _print(report.render_json(reports, todo_dir))
         return
 
-    _print(render_text(reports))
+    _print(report.render_text(reports))
 
     if not notify:
         return
-    if total_open(reports) == 0:
+    if report.total_open(reports) == 0:
         logger.info("无未完成任务，静默不发")
         return
 
-    markdown = render_lark(reports)
+    markdown = report.render_lark(reports)
     if dry_run:
         _print("[dry-run] 将执行：")
-        _print(shlex.join(build_command(markdown)))
+        _print(shlex.join(notifier.build_command(markdown)))
         _print("[dry-run] 消息体：")
         _print(markdown)
         return
 
     try:
-        message_id = send_lark(markdown)
-    except NotifyError as exc:
+        message_id = notifier.send_lark(markdown)
+    except notifier.NotifyError as exc:
         logger.error("飞书发送失败: %s", exc)
         _print(f"飞书发送失败: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from None
@@ -118,8 +115,8 @@ def install_schedule() -> None:
     """注册早晚两个每日计划任务（09:00 / 20:00）。"""
     _prepare_stream()
     try:
-        created = install()
-    except SchedulerError as exc:
+        created = scheduler.install()
+    except scheduler.SchedulerError as exc:
         _print(str(exc), file=sys.stderr)
         raise typer.Exit(code=1) from None
     for task_name in created:
@@ -131,8 +128,8 @@ def uninstall_schedule() -> None:
     """卸载早晚两个计划任务。"""
     _prepare_stream()
     try:
-        removed = uninstall()
-    except SchedulerError as exc:
+        removed = scheduler.uninstall()
+    except scheduler.SchedulerError as exc:
         _print(str(exc), file=sys.stderr)
         raise typer.Exit(code=1) from None
     if removed:
