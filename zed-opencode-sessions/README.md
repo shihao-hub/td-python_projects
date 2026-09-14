@@ -13,6 +13,7 @@ MCP server 和 CLI 工具，用于查询和迁移 Zed 编辑器 + OpenCode 的�
   - `zoc mcp`：启动 MCP stdio server
 - **导出脚本**：将会话内容导出为 Markdown 文档
 - **跨机器迁移**：完整导出/导入会话到新电脑
+- **补登脚本**：把某目录下已存在但未被 Zed 索引的 opencode 会话补登进 Zed（只写 Zed，复用原 session_id）
 
 ## 安装
 
@@ -168,6 +169,43 @@ uv run python scripts/import_sessions.py sessions_archive_language_projects.db -
 **问题：归档文件过大**
 - 只导出必要的会话（不使用 `--archived`）
 - 考虑分批导出（按项目目录分别导出）
+
+---
+
+## 补登 opencode 会话到 Zed
+
+### 场景
+
+直接用 opencode CLI 在某个目录创建的会话，只存在于 `opencode.db`，Zed 从未为其建立 `sidebar_threads` 索引。因此在该目录打开 Zed 时 agent 历史列表看不到这些会话。本脚本把缺失的会话补登进 Zed：**只写 Zed，复用 opencode 原有 session_id，opencode.db 完全不动**，幂等。
+
+### 用法
+
+```bash
+# 1. 默认 dry-run 预览（子串匹配；正反斜杠均可）
+uv run python scripts/link_sessions.py language_projects
+
+# 2. 传精确目录（子串命中多个目录时用于消歧）
+uv run python scripts/link_sessions.py "D:/Users/language_projects"
+
+# 子串命中多个目录时全部处理（每个会话挂到自己的目录）
+uv run python scripts/link_sessions.py language_projects --all
+
+# 把所有命中会话强制挂到指定 Zed 工作区
+uv run python scripts/link_sessions.py language_projects --target "D:/Users/language_projects"
+
+# 3. 关闭 Zed 和 opencode 后实际写入
+uv run python scripts/link_sessions.py language_projects --apply
+```
+
+### 行为说明
+
+- **只写 Zed**：不修改 `opencode.db`；已存在索引的会话自动跳过（可反复运行）
+- **路径归一化**：opencode 目录用正斜杠、Zed `folder_paths` 用反斜杠，统一 `os.path.normpath`
+- **时间格式**：opencode 毫秒时间戳 → Zed 的 UTC ISO（9 位小数 + `+00:00`）
+- **子会话**：`parent_id` 非空的 subagent 会话默认跳过（Zed 不为其建独立 thread），`--include-subagents` 可强制纳入
+- **多目录**：子串命中多个目录时中止并要求消歧，或 `--all` / `--target`
+- **安全**：`--apply` 前检查 Zed 与 opencode 进程均已关闭，自动备份 Zed 三件套到 `%TEMP%\zoc_backup`，写入后 `PRAGMA wal_checkpoint(TRUNCATE)` 并重开只读连接验证
+- 写入后需**完全重启 Zed** 再验证历史列表（内存态可能滞后）
 
 ---
 
