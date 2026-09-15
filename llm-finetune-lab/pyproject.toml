@@ -1,0 +1,34 @@
+[project]
+name = "llm-finetune-lab"
+version = "0.1.0"
+description = "本地小模型微调学习实验室：LoRA/QLoRA 全流程 + 制度文档强约束"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.7",
+    "transformers>=5.0",
+    "trl>=1.0",
+    "peft>=0.20",
+    "datasets>=4.7",
+    "accelerate>=1.4",
+    "bitsandbytes>=0.50",
+    "python-docx>=1.1",
+    "psutil>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+# PyTorch 必须走 cu128 索引：RTX 50 系（Blackwell / sm_120）只有 cu128+ 的 wheel 支持。
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
