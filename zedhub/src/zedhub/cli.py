@@ -1,4 +1,4 @@
-﻿"""zedhub — read-only CLI over Zed's agent session database.
+"""zedhub — read-only CLI over Zed's agent session database.
 
 Output contract (what frontends/other tools may rely on):
 - Successful commands print a single JSON object to stdout:
@@ -11,7 +11,7 @@ Output contract (what frontends/other tools may rely on):
 Programmatic access (standard protocols, no custom envelope knowledge needed):
 - `zedhub rpc`   JSON-RPC 2.0 over line-delimited stdio (one request per
                  line, one response per line). Method table and error codes:
-                 docs/python_projects/zedhub/protocol.md.
+                 docs/projects/python_projects/zedhub/protocol.md.
 - `zedhub mcp`   MCP stdio server exposing the same queries as tools.
 Both share the method registry in api.py; payload shapes are identical to
 the "data" field of the JSON envelope above.

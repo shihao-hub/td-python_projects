@@ -37,4 +37,4 @@ uv run python main.py run env_baseline --scenario all
 
 ## 教程文档
 
-中文教程见父仓库 `docs/python_projects/llm-finetune-lab/`。
+中文教程见父仓库 `docs/projects/python_projects/llm-finetune-lab/`。

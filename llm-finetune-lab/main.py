@@ -1,4 +1,4 @@
-﻿"""llm-finetune-lab 实验目录入口。
+"""llm-finetune-lab 实验目录入口。
 
 用法（在 llm-finetune-lab/ 目录下执行）：
 
@@ -81,7 +81,7 @@ def cmd_list() -> None:
         print(f"      依赖:     {needs}")
         print(f"      运行:     uv run python -m apps.{app['name']} --list")
     print("\n环境自检: uv run python main.py doctor")
-    print("教程文档: 父仓库 docs/python_projects/llm-finetune-lab/")
+    print("教程文档: 父仓库 docs/projects/python_projects/llm-finetune-lab/")
 
 
 SERVICE_HINTS = {

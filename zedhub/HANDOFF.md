@@ -59,7 +59,7 @@ src/zedhub/
 - `rpc.discover` 保留方法：返回 OpenRPC 风格 descriptor（方法/参数 schema/描述），由 api.METHOD_SPECS 生成；纯元数据**不走快照路径**，数据库缺失也可用
 - `zedhub mcp`：MCP stdio server，4 个 tool 与 RPC 方法一一对应；域异常统一转 ToolError 透出原因
 - 两端共享 `api.py` 注册表；payload 形状 = CLI 信封的 `data` 字段，三端不漂移
-- 方法表与客户端接入配置：父仓库 `docs/python_projects/zedhub/protocol.md`
+- 方法表与客户端接入配置：父仓库 `docs/projects/python_projects/zedhub/protocol.md`
 - 已知 SDK 行为：mcp 2.x 对 list 返回值 structured_content 包成 `{"result": [...]}`，TextContent 只含首个元素——消费侧用 structured_content（测试 payload() helper 已处理）
 
 **已知坑（都踩过，别再踩）**：

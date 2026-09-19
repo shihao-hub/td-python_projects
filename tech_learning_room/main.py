@@ -107,7 +107,7 @@ def cmd_list() -> None:
         print(f"      依赖服务: {needs}")
         print(f"      运行:     uv run python -m apps.{app['name']} --list")
     print("\n环境自检: uv run python main.py doctor")
-    print("教程文档: 父仓库 docs/python_projects/tech_learning_room/")
+    print("教程文档: 父仓库 docs/projects/python_projects/tech_learning_room/")
 
 
 def _tcp_probe(host: str, port: int, timeout: float = 2.0) -> tuple[bool, str]:

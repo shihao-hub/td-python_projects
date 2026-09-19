@@ -9,7 +9,7 @@
 - `zedhub mcp`：MCP stdio server，供 AI 客户端（Zed / Claude Code / opencode）接入
 
 方法表、错误码与各客户端接入配置见父仓库
-`docs/python_projects/zedhub/protocol.md`。
+`docs/projects/python_projects/zedhub/protocol.md`。
 
 ## 运行
 

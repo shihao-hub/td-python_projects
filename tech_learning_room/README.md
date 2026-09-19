@@ -43,4 +43,4 @@ uv run python main.py run postgres_transactions --scenario deadlock
 
 ## 教程文档
 
-原理详解见父仓库 `docs/python_projects/tech_learning_room/`（每 app 一篇 + 总览 README）。
+原理详解见父仓库 `docs/projects/python_projects/tech_learning_room/`（每 app 一篇 + 总览 README）。

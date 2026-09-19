@@ -50,7 +50,7 @@ def scenario_info() -> int:
     lab.fact("数据根目录", paths.DATA_ROOT)
     lab.fact("磁盘空间", paths.free_space_text())
     lab.fact("HF_HOME", paths.HF_CACHE_DIR)
-    lab.fact("教程文档", "父仓库 docs/python_projects/llm-finetune-lab/")
+    lab.fact("教程文档", "父仓库 docs/projects/python_projects/llm-finetune-lab/")
 
     lab.conclude("环境信息正常。下一步：--scenario budget 建立显存预算心智模型")
     return 0
