@@ -9,7 +9,7 @@
 - `zedhub mcp`：MCP stdio server，供 AI 客户端（Zed / Claude Code / opencode）接入
 
 方法表、错误码与各客户端接入配置见父仓库
-`docs/projects/python_projects/zedhub/protocol.md`。
+`docs/projects/python_projects/zedhub/zedhub 对接协议.md`。
 
 ## 运行
 
@@ -20,7 +20,7 @@ uv run zedhub --help    # 直接跑（uv 自动 sync 依赖）
 
 ## 出 exe
 
-exe 本体是 [python-launcher-go](../python-launcher-go) 编译的通用启动器壳（拉起
+exe 本体是 python-launcher-go（`go_projects/pythonlauncher`）编译的通用启动器壳（拉起
 `uv run --project <本项目> -- zedhub <参数>`），按命令名改名部署到本项目根：
 
 ```powershell

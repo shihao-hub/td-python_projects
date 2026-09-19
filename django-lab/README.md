@@ -105,7 +105,7 @@ Django 给的是「约定 + 引力」，不是警察；但约束谱系从软到�
 | whitenoise 6.12 | settings.MIDDLEWARE | 生产静态文件零配置托管（DEBUG=False 时自动切 Manifest 存储） |
 | django-extensions 4.1 | INSTALLED_APPS | `shell_plus`（自动 import 全部模型）、`show_urls` 等增强命令 |
 | dj-database-url 3.1 | settings.DATABASES | 一条 URL 切换数据库（配 `psycopg` 3 可选组） |
-| sqlalchemy 2.0 + aiosqlite | `sqla_lab/` | **共库对照实验室**：同一批表、两种 ORM 逐条翻译（含 AsyncSession），`orm_compare` 命令 11 项场景两边结果必须一致；概念映射与踩坑记录见父仓库 `docs/projects/python_projects/django-lab/orm-compare.md` |
+| sqlalchemy 2.0 + aiosqlite | `sqla_lab/` | **共库对照实验室**：同一批表、两种 ORM 逐条翻译（含 AsyncSession），`orm_compare` 命令 11 项场景两边结果必须一致；概念映射与踩坑记录见父仓库 `docs/projects/python_projects/django-lab/ORM 对照手册.md` |
 | django-debug-toolbar 8.0 | dev 组 | 开发时 SQL/签名面板（DEBUG=True 自动挂载） |
 | django-stubs 6.1 + mypy 2.3 | dev 组 | `mypy catalog config api` 全绿 |
 | ruff 0.16 | dev 组 | lint + format，规则见 pyproject.toml |
