@@ -1,0 +1,10 @@
+[project]
+name = "sql-pg-sqlalchemy"
+version = "0.1.0"
+description = "SQLAlchemy 2.0 + PostgreSQL 学习脚手架（为有 Django 基础的后端设计）"
+requires-python = ">=3.12"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "python-dotenv>=1.0",
+]
