@@ -27,13 +27,17 @@ cd setup
 
 ## 阶段五：SQLAlchemy（uv + psycopg3，独立小库 sql_pg_lab）
 
-启动三步：
+启动两步：
 
 ```powershell
 uv sync                      # 安装依赖
-Copy-Item .env.example .env  # 然后编辑 .env 填 PG_PASSWORD
 uv run python setup_db.py    # 建库建表 + 灌测试数据（可反复运行重置）
 ```
+
+数据库配置来自 **liteconf 配置中心**（app=`sql-pg-sqlalchemy`，env=`dev`，控制台 <http://localhost:8646/ui/>）：
+只调一个 `GET /api/sql-pg-sqlalchemy/dev` 拿键值，服务未启动会直接报错退出。
+支持的键：`PG_HOST`(localhost) / `PG_PORT`(5432) / `PG_USER`(postgres) / `PG_PASSWORD`(必填) / `PG_DBNAME`(sql_pg_lab) / `ECHO_SQL`(true)。
+换服务地址用环境变量 `LITECONF_URL`。
 
 | 文件 | 主题 | Django 对照 |
 |---|---|---|

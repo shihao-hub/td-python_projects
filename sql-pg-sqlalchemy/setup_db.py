@@ -1,6 +1,6 @@
 """一键初始化：建库 → 建表 → 灌测试数据（可反复运行，每次重置）。
 
-运行前：复制 .env.example 为 .env，填上本机 PostgreSQL 的密码。
+运行前：确保 liteconf 配置服务已启动，且 sql-pg-sqlalchemy/dev 里配置了 PG_PASSWORD。
 运行：uv run python setup_db.py
 """
 from decimal import Decimal
@@ -69,7 +69,7 @@ def ensure_database() -> None:
     CREATE DATABASE 不能在事务里执行，所以要 AUTOCOMMIT 隔离级别。
     """
     if not PG_PASSWORD:
-        raise SystemExit("缺少 PG_PASSWORD：请先复制 .env.example 为 .env 并填写密码。")
+        raise SystemExit("缺少 PG_PASSWORD：请在 liteconf 控制台为 sql-pg-sqlalchemy/dev 补上该键")
     admin = create_engine(build_url("postgres"), isolation_level="AUTOCOMMIT")
     with admin.connect() as conn:
         exists = conn.execute(
