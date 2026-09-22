@@ -1,0 +1,21 @@
+[project]
+name = "hucci-registration-use-case-layered"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "shihao-hub", email = "2958017271@qq.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "python-multipart>=0.0.32",
+    "uvicorn>=0.53.0",
+]
+
+[project.scripts]
+hucci = "hucci_registration_use_case_layered:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
