@@ -5,7 +5,6 @@ description = "Token usage and cost statistics tool for Zed ACP agent sessions (
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "blackboxprotobuf>=1.0.1",
     "rich>=13.0.0",
 ]
 

@@ -13,7 +13,7 @@ Zed 编辑器中 ACP 智能体（**pi / antigravity / opencode**）会话 Token 
   - **动态契约反射 Schema**：`--schema` 零 I/O 毫秒级输出当前视图专有的 JSON Schema，方便上游下游（如 Agent / CI 脚本）进行确定性校验与代码生成。
 - **混合模型自动折叠与分解**：同一个会话中切过模型，按模型分别统计，并汇总全会话。
 - **本地数据安全读取**：Zed db / antigravity 会话库采用快照复制防锁；opencode 大库（GB 级）以只读 URI 直查 + 短重试，绝不复制。
-- **轻量依赖**：仅 Rich（终端渲染）与 blackboxprotobuf（无 .proto 的 protobuf 解码）。
+- **轻量零依赖**：仅 Rich（终端渲染）一个第三方依赖；antigravity 的 protobuf 按字段号轻量遍历（全量 corpus 实测 0.04s），无 protobuf 库依赖。
 
 ---
 
