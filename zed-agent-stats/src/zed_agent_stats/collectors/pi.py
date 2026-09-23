@@ -1,68 +1,22 @@
-"""Data collector for Zed pi-acp sessions."""
+"""pi-acp 采集器：Zed 线程元数据 + ~/.pi/pi-acp 会话 JSONL 解析。"""
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
-import shutil
-import sqlite3
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from zed_pi_stats.models import ModelUsage, SessionStats, TokenUsage
+from zed_agent_stats.collectors._zed import get_zed_threads
+from zed_agent_stats.models import ModelUsage, SessionStats, TokenUsage
 
-
-def get_zed_threads() -> dict[str, dict[str, Any]]:
-    """Safely read Zed's SQLite database sidebar_threads for pi-acp sessions."""
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        return {}
-
-    db_dir = Path(local_app_data) / "Zed" / "db" / "0-stable"
-    db_file = db_dir / "db.sqlite"
-    if not db_file.exists():
-        return {}
-
-    temp_dir = tempfile.mkdtemp(prefix="zed_db_read_")
-    try:
-        # Safe read: copy SQLite 3-files (main, wal, shm) to avoid lock conflicts
-        for suffix in ["", "-wal", "-shm"]:
-            src = db_dir / f"db.sqlite{suffix}"
-            if src.exists():
-                shutil.copy2(src, Path(temp_dir) / f"db.sqlite{suffix}")
-
-        temp_db = Path(temp_dir) / "db.sqlite"
-        with contextlib.closing(sqlite3.connect(temp_db)) as connection:
-            rows = connection.execute(
-                """
-                SELECT session_id, title, folder_paths, created_at, updated_at
-                FROM sidebar_threads
-                WHERE agent_id = 'pi-acp'
-                ORDER BY updated_at DESC
-                """
-            ).fetchall()
-        results = {}
-        for row in rows:
-            sid, title, folder_paths, created_at, updated_at = row
-            paths = [p for p in (folder_paths or "").split("\n") if p.strip()]
-            results[str(sid)] = {
-                "title": title or "",
-                "folder_paths": paths,
-                "created_at": created_at or "",
-                "updated_at": updated_at or "",
-            }
-        return results
-    except Exception:
-        return {}
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+ZED_AGENT_ID = "pi-acp"
+AGENT_NAME = "pi"
 
 
 def get_pi_acp_session_map() -> dict[str, dict[str, Any]]:
-    """Load ~/.pi/pi-acp/session-map.json."""
+    """加载 ~/.pi/pi-acp/session-map.json。"""
     map_path = Path.home() / ".pi" / "pi-acp" / "session-map.json"
     if not map_path.exists():
         return {}
@@ -78,7 +32,7 @@ def get_pi_acp_session_map() -> dict[str, dict[str, Any]]:
 
 
 def parse_session_jsonl(session_file: str | Path) -> tuple[TokenUsage, dict[str, ModelUsage], int, int, int]:
-    """Parse a single pi session .jsonl file.
+    """解析单个 pi 会话 .jsonl 文件。
 
     Returns:
         (total_usage, model_usages, turns, user_messages, assistant_messages)
@@ -222,12 +176,12 @@ def parse_session_jsonl(session_file: str | Path) -> tuple[TokenUsage, dict[str,
     return total_usage, model_usages, turns, user_messages, assistant_messages
 
 
-def collect_all_sessions(limit: int | None = None, days: int | None = None) -> list[SessionStats]:
-    """Collect and aggregate stats for all pi-acp sessions."""
-    zed_threads = get_zed_threads()
+def collect(days: int | None = None) -> list[SessionStats]:
+    """采集并聚合全部 pi-acp 会话统计。"""
+    zed_threads = get_zed_threads(ZED_AGENT_ID)
     session_map = get_pi_acp_session_map()
 
-    # Collect all known session IDs
+    # 汇总所有已知会话 ID
     all_sids = set(session_map.keys()) | set(zed_threads.keys())
     sessions: list[SessionStats] = []
 
@@ -248,10 +202,9 @@ def collect_all_sessions(limit: int | None = None, days: int | None = None) -> l
         title = thread_info.get("title", "")
         folder_paths = thread_info.get("folder_paths", [])
 
-        # Filter by days if specified
+        # 按天数过滤
         if days is not None and updated_at:
             try:
-                # updated_at ISO format
                 clean_time = updated_at.replace("Z", "+00:00")
                 dt = datetime.fromisoformat(clean_time)
                 if (now - dt).total_seconds() > days * 86400:
@@ -266,8 +219,8 @@ def collect_all_sessions(limit: int | None = None, days: int | None = None) -> l
             model_usages = {}
             turns = user_msgs = asst_msgs = 0
 
-        # Create session stats
         s = SessionStats(
+            agent=AGENT_NAME,
             session_id=sid,
             title=title,
             folder_paths=folder_paths,
@@ -283,10 +236,6 @@ def collect_all_sessions(limit: int | None = None, days: int | None = None) -> l
         )
         sessions.append(s)
 
-    # Sort descending by updated_at
+    # 按 updated_at 降序
     sessions.sort(key=lambda x: x.updated_at or "", reverse=True)
-
-    if limit is not None and limit > 0:
-        sessions = sessions[:limit]
-
     return sessions

@@ -1,4 +1,4 @@
-"""Data models and schemas for zed-pi-stats."""
+"""Data models and schemas for zed-agent-stats."""
 
 from __future__ import annotations
 
@@ -55,9 +55,10 @@ class ModelUsage:
 
 @dataclass
 class SessionStats:
-    """Statistics for a single Zed pi-acp conversation session."""
+    """Statistics for a single Zed ACP agent conversation session."""
 
     session_id: str
+    agent: str = ""
     title: str | None = None
     folder_paths: list[str] = field(default_factory=list)
     cwd: str | None = None
@@ -117,6 +118,7 @@ class SessionStats:
         """Convert session to exportable dictionary."""
         return {
             "session_id": self.session_id,
+            "agent": self.agent,
             "short_id": self.short_id,
             "title": self.title,
             "title_display": self.title_display,
@@ -196,7 +198,8 @@ SESSION_ITEM_SCHEMA = {
     "type": "object",
     "required": ["session_id", "short_id", "title_display", "project_name", "turns", "total_usage"],
     "properties": {
-        "session_id": {"type": "string", "description": "会话 UUID"},
+        "session_id": {"type": "string", "description": "会话 UUID 或会话 ID"},
+        "agent": {"type": "string", "description": "所属智能体 (pi / antigravity / opencode)"},
         "short_id": {"type": "string", "description": "8位短会话 ID"},
         "title": {"type": ["string", "null"], "description": "用户自定义会话标题"},
         "title_display": {"type": "string", "description": "展示标题 (缺省时展示短 ID)"},
@@ -211,17 +214,36 @@ SESSION_ITEM_SCHEMA = {
     },
 }
 
+AGENT_ITEM_SCHEMA = {
+    "type": "object",
+    "required": ["agent", "session_count", "turns", "total_tokens", "cost"],
+    "properties": {
+        "agent": {"type": "string", "description": "智能体标识 (pi / antigravity / opencode)"},
+        "display_name": {"type": "string", "description": "智能体人读名称"},
+        "session_count": {"type": "integer", "description": "会话总数"},
+        "turns": {"type": "integer", "description": "交互轮次"},
+        "input_tokens": {"type": "integer", "description": "输入 tokens"},
+        "output_tokens": {"type": "integer", "description": "输出 tokens"},
+        "cache_read_tokens": {"type": "integer", "description": "缓存读取 tokens"},
+        "cache_write_tokens": {"type": "integer", "description": "缓存写入 tokens"},
+        "reasoning_tokens": {"type": "integer", "description": "推理 tokens"},
+        "total_tokens": {"type": "integer", "description": "计费总 tokens"},
+        "cost": {"type": "number", "description": "预估总费用 (USD)"},
+    },
+}
+
 
 def get_full_schema() -> dict[str, Any]:
     """Return JSON Schema for the full multi-dimensional report."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ZedPiStatsFullReport",
-        "description": "Zed pi-acp 会话 Token 消耗全量多维统计报告契约",
+        "title": "ZedAgentStatsFullReport",
+        "description": "Zed ACP 智能体会话 Token 消耗全量多维统计报告契约",
         "type": "object",
-        "required": ["summary", "by_model", "by_project", "sessions"],
+        "required": ["summary", "by_agent", "by_model", "by_project", "sessions"],
         "properties": {
             "summary": SUMMARY_SCHEMA,
+            "by_agent": {"type": "array", "items": AGENT_ITEM_SCHEMA},
             "by_model": {"type": "array", "items": MODEL_ITEM_SCHEMA},
             "by_project": {"type": "array", "items": PROJECT_ITEM_SCHEMA},
             "sessions": {"type": "array", "items": SESSION_ITEM_SCHEMA},
@@ -233,8 +255,8 @@ def get_model_schema() -> dict[str, Any]:
     """Return JSON Schema for model projection."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ZedPiStatsModelReport",
-        "description": "Zed pi-acp 模型维度 Token 消耗统计契约",
+        "title": "ZedAgentStatsModelReport",
+        "description": "Zed ACP 智能体模型维度 Token 消耗统计契约",
         "type": "object",
         "required": ["summary", "by_model"],
         "properties": {
@@ -248,8 +270,8 @@ def get_project_schema() -> dict[str, Any]:
     """Return JSON Schema for project/workspace projection."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ZedPiStatsProjectReport",
-        "description": "Zed pi-acp 工作区工程维度 Token 消耗统计契约",
+        "title": "ZedAgentStatsProjectReport",
+        "description": "Zed ACP 智能体工作区工程维度 Token 消耗统计契约",
         "type": "object",
         "required": ["summary", "by_project"],
         "properties": {
@@ -263,8 +285,8 @@ def get_session_schema() -> dict[str, Any]:
     """Return JSON Schema for session list projection."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ZedPiStatsSessionReport",
-        "description": "Zed pi-acp 会话明细维度 Token 消耗统计契约",
+        "title": "ZedAgentStatsSessionReport",
+        "description": "Zed ACP 智能体会话明细维度 Token 消耗统计契约",
         "type": "object",
         "required": ["summary", "sessions"],
         "properties": {

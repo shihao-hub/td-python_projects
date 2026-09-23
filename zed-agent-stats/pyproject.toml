@@ -1,0 +1,17 @@
+[project]
+name = "zed-agent-stats"
+version = "0.2.0"
+description = "Token usage and cost statistics tool for Zed ACP agent sessions (pi / antigravity / opencode)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "blackboxprotobuf>=1.0.1",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+zed-agent-stats = "zed_agent_stats.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

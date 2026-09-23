@@ -1,4 +1,4 @@
-"""Reporting and aggregation views for zed-pi-stats."""
+"""Reporting and aggregation views for zed-agent-stats."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from zed_pi_stats.models import (
+from zed_agent_stats.models import (
     SessionStats,
     TokenUsage,
     get_full_schema,
@@ -47,9 +47,9 @@ def format_in_out(inp: int, out: int, raw: bool = False) -> str:
 
 
 def format_cost(cost: float) -> str:
-    """Format cost nicely (e.g. $0.0012, $1.25)."""
+    """Format cost nicely (e.g. $0.0012, $1.25); zero renders as '-' (订阅制无费用)."""
     if cost == 0:
-        return "$0.00"
+        return "-"
     if cost < 0.01:
         return f"${cost:.4f}"
     return f"${cost:.2f}"
@@ -69,6 +69,49 @@ def format_time(ts: str) -> str:
     except Exception:
         pass
     return ts[:16]
+
+
+def aggregate_by_agent(sessions: list[SessionStats]) -> list[dict[str, Any]]:
+    """Aggregate token usage and cost grouped by agent (合并总览专用)."""
+    from zed_agent_stats.agents import all_agents
+
+    display_names = {spec.cli_name: spec.display_name for spec in all_agents()}
+    agent_map: dict[str, dict[str, Any]] = {}
+
+    for s in sessions:
+        key = s.agent or "unknown"
+        if key not in agent_map:
+            agent_map[key] = {
+                "agent": key,
+                "display_name": display_names.get(key, key),
+                "session_count": 0,
+                "turns": 0,
+                "usage": TokenUsage(),
+            }
+        entry = agent_map[key]
+        entry["session_count"] += 1
+        entry["turns"] += s.turns
+        entry["usage"].add(s.total_usage)
+
+    results = []
+    for item in agent_map.values():
+        u: TokenUsage = item["usage"]
+        results.append({
+            "agent": item["agent"],
+            "display_name": item["display_name"],
+            "session_count": item["session_count"],
+            "turns": item["turns"],
+            "input_tokens": u.input_tokens,
+            "output_tokens": u.output_tokens,
+            "cache_read_tokens": u.cache_read_tokens,
+            "cache_write_tokens": u.cache_write_tokens,
+            "reasoning_tokens": u.reasoning_tokens,
+            "total_tokens": u.total_tokens,
+            "cost": u.cost,
+        })
+
+    results.sort(key=lambda x: x["total_tokens"], reverse=True)
+    return results
 
 
 def aggregate_by_model(sessions: list[SessionStats]) -> list[dict[str, Any]]:
@@ -186,13 +229,20 @@ def render_tables(
     wide: bool = False,
     raw_numbers: bool = False,
     console: Console | None = None,
+    agent_name: str | None = None,
 ) -> None:
     """Print beautifully formatted Rich tables to terminal with unified width alignment."""
+    from zed_agent_stats.agents import resolve as resolve_agent
+
     if console is None:
         console = get_console()
 
+    spec = resolve_agent(agent_name) if agent_name else None
+    scope_label = spec.display_name if spec else "Zed ACP 全智能体"
+    show_agents = agent_name is None  # by_agent 分解仅合并总览展示
+
     if not sessions:
-        console.print("[yellow]未找到匹配的 Zed pi-acp 会话记录。[/yellow]")
+        console.print(f"[yellow]未找到匹配的 {scope_label} 会话记录。[/yellow]")
         return
 
     grand = aggregate_grand_total(sessions)
@@ -212,8 +262,57 @@ def render_tables(
         f"([dim]输入:[/dim] {in_str}, [dim]输出:[/dim] {out_str}, [dim]缓存读:[/dim] {cache_str})    "
         f"[bold yellow]总费用:[/bold yellow] [bold red]{format_cost(grand['cost'])}[/bold red]"
     )
-    console.print(Panel(summary_text, title="Zed pi-acp 会话消耗与成本总览", border_style="cyan", box=ROUNDED, expand=True))
+    console.print(Panel(summary_text, title=f"{scope_label} 会话消耗与成本总览", border_style="cyan", box=ROUNDED, expand=True))
     console.print()
+
+    # 1.5 Agent 分解表 (仅合并总览)
+    if show_agents:
+        agent_stats = aggregate_by_agent(sessions)
+        table = Table(
+            title="各智能体消耗汇总",
+            box=ROUNDED,
+            header_style="bold yellow",
+            expand=True,
+            pad_edge=False,
+            collapse_padding=True,
+        )
+        table.add_column("智能体", style="bold cyan", min_width=12, ratio=1, overflow="ellipsis")
+        table.add_column("会话数", justify="right", no_wrap=True)
+        table.add_column("轮次", justify="right", no_wrap=True)
+
+        if is_wide:
+            table.add_column("输入 Tokens", justify="right", no_wrap=True)
+            table.add_column("输出 Tokens", justify="right", no_wrap=True)
+            table.add_column("缓存读取", justify="right", no_wrap=True)
+        else:
+            table.add_column("输入/输出", justify="right", no_wrap=True)
+            table.add_column("缓存读", justify="right", no_wrap=True)
+
+        table.add_column("Tokens", justify="right", style="green", no_wrap=True)
+        table.add_column("费用", justify="right", style="bold yellow", no_wrap=True)
+
+        for a in agent_stats:
+            row = [
+                a["display_name"],
+                str(a["session_count"]),
+                str(a["turns"]),
+            ]
+            if is_wide:
+                row.append(format_tokens(a["input_tokens"], raw=raw_numbers))
+                row.append(format_tokens(a["output_tokens"], raw=raw_numbers))
+                row.append(format_tokens(a["cache_read_tokens"], raw=raw_numbers))
+            else:
+                row.append(format_in_out(a["input_tokens"], a["output_tokens"], raw=raw_numbers))
+                row.append(format_tokens(a["cache_read_tokens"], raw=raw_numbers))
+
+            row.extend([
+                format_tokens(a["total_tokens"], raw=raw_numbers),
+                format_cost(a["cost"]),
+            ])
+            table.add_row(*row)
+
+        console.print(table)
+        console.print()
 
     # 2. Session details table (expand=True, aligned with panel)
     if show_sessions:
@@ -402,9 +501,10 @@ def render_projected_json(
         }
         return json.dumps(data, ensure_ascii=False, indent=2)
 
-    # Full report (default)
+    # Full report (default, 含 by_agent 分解)
     data = {
         "summary": summary_data,
+        "by_agent": aggregate_by_agent(sessions),
         "by_model": aggregate_by_model(sessions),
         "by_project": aggregate_by_project(sessions),
         "sessions": [s.to_dict() for s in (sessions[:limit] if limit > 0 else sessions)],
