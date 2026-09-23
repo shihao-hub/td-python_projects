@@ -1,8 +1,0 @@
-.venv/
-*.exe
-__pycache__/
-*.pyc
-.env
-.nicegui/
-.pytest_cache/
-dist/
