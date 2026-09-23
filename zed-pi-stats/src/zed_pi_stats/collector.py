@@ -117,6 +117,7 @@ def parse_session_jsonl(session_file: str | Path) -> tuple[TokenUsage, dict[str,
         cr = _as_int(usage_dict.get("cacheRead"))
         cw = _as_int(usage_dict.get("cacheWrite"))
         reas = _as_int(usage_dict.get("reasoning"))
+        tot = _as_int(usage_dict.get("total")) or (inp + out + cr + cw)
         cost_raw = usage_dict.get("cost")
         cost_val = 0.0
         if isinstance(cost_raw, dict):
@@ -129,6 +130,7 @@ def parse_session_jsonl(session_file: str | Path) -> tuple[TokenUsage, dict[str,
             cache_read_tokens=cr,
             cache_write_tokens=cw,
             reasoning_tokens=reas,
+            total_tokens=tot,
             cost=cost_val,
         )
 
