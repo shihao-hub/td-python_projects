@@ -1,4 +1,4 @@
-"""Reporting and aggregation views for zed-agent-stats."""
+"""Reporting and aggregation views for zedagentstats."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from zed_agent_stats.models import (
+from zedagentstats.models import (
     SessionStats,
     TokenUsage,
     get_full_schema,
@@ -73,7 +73,7 @@ def format_time(ts: str) -> str:
 
 def aggregate_by_agent(sessions: list[SessionStats]) -> list[dict[str, Any]]:
     """Aggregate token usage and cost grouped by agent (合并总览专用)."""
-    from zed_agent_stats.agents import all_agents
+    from zedagentstats.agents import all_agents
 
     display_names = {spec.cli_name: spec.display_name for spec in all_agents()}
     agent_map: dict[str, dict[str, Any]] = {}
@@ -232,7 +232,7 @@ def render_tables(
     agent_name: str | None = None,
 ) -> None:
     """Print beautifully formatted Rich tables to terminal with unified width alignment."""
-    from zed_agent_stats.agents import resolve as resolve_agent
+    from zedagentstats.agents import resolve as resolve_agent
 
     if console is None:
         console = get_console()

@@ -1,4 +1,4 @@
-# zed-agent-stats
+# zedagentstats
 
 Zed 编辑器中 ACP 智能体（**pi / antigravity / opencode**）会话 Token 消耗、交互轮次与预估费用的轻量统计工具。
 
@@ -23,50 +23,50 @@ Zed 编辑器中 ACP 智能体（**pi / antigravity / opencode**）会话 Token 
 
 ```powershell
 # 总览看板 (各智能体分解 + 最近会话 + 模型汇总 + 工作区汇总)
-zed-agent-stats
+zedagentstats
 ```
 
 ### 2. 单智能体看板
 
 ```powershell
 # pi 智能体
-zed-agent-stats pi
+zedagentstats pi
 
 # antigravity（缩写 agy）
-zed-agent-stats antigravity
-zed-agent-stats agy --by-model
+zedagentstats antigravity
+zedagentstats agy --by-model
 
 # opencode（缩写 oc）
-zed-agent-stats opencode --by-session -n 20
-zed-agent-stats oc --by-model
+zedagentstats opencode --by-session -n 20
+zedagentstats oc --by-model
 ```
 
 ### 3. 投影与机器自动化（JSON + Schema 对齐）
 
 ```powershell
 # 模型维度 JSON / Schema
-zed-agent-stats agy --by-model --json
-zed-agent-stats oc --by-model --schema
+zedagentstats agy --by-model --json
+zedagentstats oc --by-model --schema
 
 # 会话明细 JSON（最近 5 条）
-zed-agent-stats pi --by-session -n 5 --json
+zedagentstats pi --by-session -n 5 --json
 
 # 全量报告（含 by_agent / by_model / by_project / sessions）
-zed-agent-stats --json
-zed-agent-stats --schema
+zedagentstats --json
+zedagentstats --schema
 ```
 
 ### 4. 展示选项
 
 ```powershell
 # 展开全部列 (宽终端) + 显示未缩写的原始大整数
-zed-agent-stats --wide --raw
+zedagentstats --wide --raw
 
 # 仅统计最近 7 天
-zed-agent-stats agy --days 7
+zedagentstats agy --days 7
 ```
 
-> 参数请放在子命令之后（如 `zed-agent-stats pi --by-model`）。
+> 参数请放在子命令之后（如 `zedagentstats pi --by-model`）。
 
 ---
 
@@ -74,7 +74,7 @@ zed-agent-stats agy --days 7
 
 ```powershell
 # 在本项目目录下直接运行
-uv run zed-agent-stats
+uv run zedagentstats
 
 # 或者全局安装到 uv 工具箱
 uv tool install .

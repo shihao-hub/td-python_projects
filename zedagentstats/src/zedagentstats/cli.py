@@ -1,4 +1,4 @@
-"""Command line interface for zed-agent-stats."""
+"""Command line interface for zedagentstats."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import argparse
 import json
 import sys
 
-from zed_agent_stats.agents import all_agents, load_collector, resolve
-from zed_agent_stats.reporter import (
+from zedagentstats.agents import all_agents, load_collector, resolve
+from zedagentstats.reporter import (
     get_console,
     get_projected_schema,
     render_projected_json,
@@ -69,29 +69,29 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
-        prog="zed-agent-stats",
+        prog="zedagentstats",
         description="Zed 编辑器 ACP 智能体（pi / antigravity / opencode）会话 Token 消耗与成本统计工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 示例用法 (参数请放在子命令之后):
   # 合并总览：全部 agent (总览 + 最近10条会话 + 模型汇总 + 工作区汇总)
-  zed-agent-stats
+  zedagentstats
 
   # pi 智能体默认看板
-  zed-agent-stats pi
+  zedagentstats pi
 
   # antigravity (缩写 agy) 模型消耗汇总
-  zed-agent-stats antigravity --by-model
-  zed-agent-stats agy --by-model
+  zedagentstats antigravity --by-model
+  zedagentstats agy --by-model
 
   # opencode (缩写 oc) 会话明细 JSON
-  zed-agent-stats oc --by-session --json
+  zedagentstats oc --by-session --json
 
   # 获取模型维度 JSON 的契约说明书 (JSON Schema)
-  zed-agent-stats pi --by-model --schema
+  zedagentstats pi --by-model --schema
 
   # 展开完整明细列并显示大整数
-  zed-agent-stats --wide --raw
+  zedagentstats --wide --raw
 """,
     )
     _add_common_args(parser)

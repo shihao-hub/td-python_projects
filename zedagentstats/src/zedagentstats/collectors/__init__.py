@@ -4,6 +4,6 @@
     collect(days: int | None = None) -> list[SessionStats]
 """
 
-from zed_agent_stats.collectors._zed import get_zed_threads
+from zedagentstats.collectors._zed import get_zed_threads
 
 __all__ = ["get_zed_threads"]

@@ -1,5 +1,5 @@
 [project]
-name = "zed-agent-stats"
+name = "zedagentstats"
 version = "0.2.0"
 description = "Token usage and cost statistics tool for Zed ACP agent sessions (pi / antigravity / opencode)"
 readme = "README.md"
@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
-zed-agent-stats = "zed_agent_stats.cli:main"
+zedagentstats = "zedagentstats.cli:main"
 
 [build-system]
 requires = ["hatchling"]

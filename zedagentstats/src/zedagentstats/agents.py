@@ -1,4 +1,4 @@
-"""Agent 注册表：定义 zed-agent-stats 支持的 ACP 智能体规格。
+"""Agent 注册表：定义 zedagentstats 支持的 ACP 智能体规格。
 
 每个 AgentSpec 描述一个 Zed 内 ACP 智能体的身份标识与数据采集器，
 Service 核心据此路由子命令到对应 collector。
@@ -10,7 +10,7 @@ import importlib
 from dataclasses import dataclass
 from typing import Callable
 
-from zed_agent_stats.models import SessionStats
+from zedagentstats.models import SessionStats
 
 
 @dataclass(frozen=True)
@@ -31,21 +31,21 @@ _REGISTRY: list[AgentSpec] = [
         zed_id="pi-acp",
         display_name="Zed pi-acp",
         aliases=(),
-        collector_module="zed_agent_stats.collectors.pi",
+        collector_module="zedagentstats.collectors.pi",
     ),
     AgentSpec(
         cli_name="antigravity",
         zed_id="antigravity-acp",
         display_name="Zed antigravity-acp",
         aliases=("agy",),
-        collector_module="zed_agent_stats.collectors.antigravity",
+        collector_module="zedagentstats.collectors.antigravity",
     ),
     AgentSpec(
         cli_name="opencode",
         zed_id="opencode",
         display_name="Zed opencode",
         aliases=("oc",),
-        collector_module="zed_agent_stats.collectors.opencode",
+        collector_module="zedagentstats.collectors.opencode",
     ),
 ]
 

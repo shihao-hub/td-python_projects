@@ -1,4 +1,4 @@
-"""Data models and schemas for zed-agent-stats."""
+"""Data models and schemas for zedagentstats."""
 
 from __future__ import annotations
 
@@ -237,7 +237,7 @@ def get_full_schema() -> dict[str, Any]:
     """Return JSON Schema for the full multi-dimensional report."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ZedAgentStatsFullReport",
+        "title": "ZedagentstatsFullReport",
         "description": "Zed ACP 智能体会话 Token 消耗全量多维统计报告契约",
         "type": "object",
         "required": ["summary", "by_agent", "by_model", "by_project", "sessions"],
@@ -255,7 +255,7 @@ def get_model_schema() -> dict[str, Any]:
     """Return JSON Schema for model projection."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ZedAgentStatsModelReport",
+        "title": "ZedagentstatsModelReport",
         "description": "Zed ACP 智能体模型维度 Token 消耗统计契约",
         "type": "object",
         "required": ["summary", "by_model"],
@@ -270,7 +270,7 @@ def get_project_schema() -> dict[str, Any]:
     """Return JSON Schema for project/workspace projection."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ZedAgentStatsProjectReport",
+        "title": "ZedagentstatsProjectReport",
         "description": "Zed ACP 智能体工作区工程维度 Token 消耗统计契约",
         "type": "object",
         "required": ["summary", "by_project"],
@@ -285,7 +285,7 @@ def get_session_schema() -> dict[str, Any]:
     """Return JSON Schema for session list projection."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ZedAgentStatsSessionReport",
+        "title": "ZedagentstatsSessionReport",
         "description": "Zed ACP 智能体会话明细维度 Token 消耗统计契约",
         "type": "object",
         "required": ["summary", "sessions"],

@@ -22,8 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from zed_agent_stats.collectors._zed import get_zed_threads
-from zed_agent_stats.models import ModelUsage, SessionStats, TokenUsage
+from zedagentstats.collectors._zed import get_zed_threads
+from zedagentstats.models import ModelUsage, SessionStats, TokenUsage
 
 ZED_AGENT_ID = "opencode"
 AGENT_NAME = "opencode"
