@@ -26,7 +26,7 @@ from . import notifier, report, scheduler, scanner
 # 默认待办目录
 DEFAULT_TODO_DIR = Path(r"D:\Users\todo")
 
-logger = logging.getLogger("todo_notify")
+logger = logging.getLogger("todonotify")
 
 app = typer.Typer(
     help="扫描待办 Markdown 复选框并推送飞书提醒。",

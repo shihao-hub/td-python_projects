@@ -13,7 +13,7 @@ import logging
 import shutil
 import subprocess
 
-logger = logging.getLogger("todo_notify")
+logger = logging.getLogger("todonotify")
 
 # 收件人 open_id（张世豪）
 RECIPIENT_OPEN_ID = "ou_7ad1912240ad66760cb0efa360eb8711"

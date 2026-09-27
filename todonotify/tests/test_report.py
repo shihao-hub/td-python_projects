@@ -6,14 +6,14 @@ import json
 from datetime import date
 from pathlib import Path
 
-from todo_notify.report import (
+from todonotify.report import (
     MAX_ITEM_LEN,
     render_json,
     render_lark,
     render_text,
     total_open,
 )
-from todo_notify.scanner import FileReport, Item, Section, scan
+from todonotify.scanner import FileReport, Item, Section, scan
 
 TODAY = date(2026, 9, 13)
 

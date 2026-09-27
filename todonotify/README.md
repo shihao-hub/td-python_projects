@@ -1,4 +1,4 @@
-# todo_notify
+# todonotify
 
 扫描 `D:\Users\todo` 下的 Markdown 待办文件，汇总未完成任务并推送飞书机器人私聊提醒。
 
@@ -7,7 +7,7 @@
 ## 环境准备
 
 ```powershell
-cd D:\Users\language_projects\python_projects\todo_notify
+cd D:\Users\language_projects\python_projects\todonotify
 uv sync
 ```
 
@@ -29,14 +29,14 @@ uv run todonotify uninstall_schedule  # 卸载计划任务
 
 ## 定时任务
 
-`install_schedule` 通过 schtasks 注册两个每日任务：`todo_notify_morning`（09:00）与 `todo_notify_evening`（20:00），`/TR` 直接指向 venv 内的 `todonotify.exe`。验证与手动触发：
+`install_schedule` 通过 schtasks 注册两个每日任务：`todonotify_morning`（09:00）与 `todonotify_evening`（20:00），`/TR` 直接指向 venv 内的 `todonotify.exe`。验证与手动触发：
 
 ```powershell
-schtasks /Query /TN todo_notify_morning
-schtasks /Run   /TN todo_notify_morning   # 立即触发一次
+schtasks /Query /TN todonotify_morning
+schtasks /Run   /TN todonotify_morning   # 立即触发一次
 ```
 
-注意：删过 `.venv` 后需重新 `uv sync` 并再次执行 `install_schedule`，否则计划任务指向的 exe 已不存在。运行日志在 `%APPDATA%\language_projects\todo_notify\todo_notify.log`（按天轮转，保留 14 份），无人值守场景的排障看这里。
+注意：删过 `.venv` 后需重新 `uv sync` 并再次执行 `install_schedule`，否则计划任务指向的 exe 已不存在。运行日志在 `%APPDATA%\language_projects\todonotify\todonotify.log`（按天轮转，保留 14 份），无人值守场景的排障看这里。
 
 ## 在 pi / opencode 会话中手动触发
 
@@ -45,7 +45,7 @@ schtasks /Run   /TN todo_notify_morning   # 立即触发一次
 1. **拿结构化数据自行分析（推荐）**：
 
    ```text
-   跑 uv run --project D:\Users\language_projects\python_projects\todo_notify todonotify --json，
+   跑 uv run --project D:\Users\language_projects\python_projects\todonotify todonotify --json，
    基于输出的 JSON 帮我总结优先级和风险
    ```
 

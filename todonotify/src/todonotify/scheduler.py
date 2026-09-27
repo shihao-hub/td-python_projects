@@ -14,12 +14,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-logger = logging.getLogger("todo_notify")
+logger = logging.getLogger("todonotify")
 
 # 早晚两个计划任务：09:00 与 20:00
 SCHEDULES = {
-    "todo_notify_morning": "09:00",
-    "todo_notify_evening": "20:00",
+    "todonotify_morning": "09:00",
+    "todonotify_evening": "20:00",
 }
 
 

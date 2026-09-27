@@ -11,15 +11,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from todo_notify.applog import get_log_dir
-from todo_notify.notifier import (
+from todonotify.applog import get_log_dir
+from todonotify.notifier import (
     RECIPIENT_OPEN_ID,
     NotifyError,
     build_command,
     build_post_content,
     send_lark,
 )
-from todo_notify.scheduler import SCHEDULES, SchedulerError, install, uninstall
+from todonotify.scheduler import SCHEDULES, SchedulerError, install, uninstall
 
 FAKE_LARK_CLI = "C:/fake/lark-cli.cmd"
 
@@ -140,14 +140,14 @@ def test_install_builds_schtasks_commands(
     created = install()
     assert created == list(SCHEDULES)
     by_name = {cmd[cmd.index("/TN") + 1]: cmd for cmd in cmds}
-    assert set(by_name) == {"todo_notify_morning", "todo_notify_evening"}
-    morning = by_name["todo_notify_morning"]
+    assert set(by_name) == {"todonotify_morning", "todonotify_evening"}
+    morning = by_name["todonotify_morning"]
     assert morning[0] == "schtasks"
     assert morning[morning.index("/SC") + 1] == "DAILY"
     assert morning[morning.index("/ST") + 1] == "09:00"
     assert morning[morning.index("/TR") + 1] == str(fake_venv / "todonotify.exe") + " --notify"
     assert "/F" in morning
-    assert by_name["todo_notify_evening"][by_name["todo_notify_evening"].index("/ST") + 1] == "20:00"
+    assert by_name["todonotify_evening"][by_name["todonotify_evening"].index("/ST") + 1] == "20:00"
 
 
 def test_install_without_exe_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -202,14 +202,14 @@ def test_log_dir_creates_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     """APPDATA 可用时日志目录链自动创建（含 language_projects 一层）。"""
     monkeypatch.setenv("APPDATA", str(tmp_path))
     log_dir = get_log_dir()
-    assert log_dir == tmp_path / "language_projects" / "todo_notify"
+    assert log_dir == tmp_path / "language_projects" / "todonotify"
     assert log_dir.is_dir()
 
 
 def test_log_dir_fallback_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """取不到 APPDATA 时回退 ~/.language_projects/todo_notify/。"""
+    """取不到 APPDATA 时回退 ~/.language_projects/todonotify/。"""
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     log_dir = get_log_dir()
-    assert log_dir == tmp_path / ".language_projects" / "todo_notify"
+    assert log_dir == tmp_path / ".language_projects" / "todonotify"
     assert log_dir.is_dir()

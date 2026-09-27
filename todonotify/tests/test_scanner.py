@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from todo_notify.scanner import scan
+from todonotify.scanner import scan
 
 # 覆盖全部解析规则的样例文档
 SAMPLE = """# 主题A 待办

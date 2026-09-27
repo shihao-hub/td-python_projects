@@ -1,4 +1,4 @@
-"""日志：写入 %APPDATA%\\language_projects\\todo_notify\\（回退 ~/.language_projects/todo_notify/）。
+"""日志：写入 %APPDATA%\\language_projects\\todonotify\\（回退 ~/.language_projects/todonotify/）。
 
 按天轮转（TimedRotatingFileHandler），保留最近 14 份；
 无人值守的计划任务场景下没有控制台，日志是唯一的排障依据。
@@ -11,8 +11,8 @@ import os
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
-APP_NAME = "todo_notify"
-LOG_FILENAME = "todo_notify.log"
+APP_NAME = "todonotify"
+LOG_FILENAME = "todonotify.log"
 
 
 def get_log_dir() -> Path:
