@@ -1,6 +1,6 @@
 -- ============================================================
 -- 01_create_db.sql —— 建库（先杀掉旧连接，删库重建，可重复执行）
--- 由 setup.ps1 调用：psql -d postgres -f 01_create_db.sql
+-- 由 setup.py 调用：psql -d postgres -f 01_create_db.sql
 -- ============================================================
 
 -- 若有残留连接，先断开，否则 DROP DATABASE 会报 "database is being accessed"

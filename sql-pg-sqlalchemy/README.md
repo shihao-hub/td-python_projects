@@ -20,7 +20,7 @@ SQL → PostgreSQL → SQLAlchemy 三阶段学习仓。本机 Windows PostgreSQL
 
 ```powershell
 cd setup
-.\setup.ps1        # 会提示输入 postgres 密码
+uv run setup/setup.py   # 会提示输入 postgres 密码
 ```
 
 然后按各目录里的 README.md 学习。
