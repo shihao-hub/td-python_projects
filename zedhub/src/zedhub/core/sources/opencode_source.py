@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..model import Session, SessionContent, SessionListRequest
 from ..opencode_repo import OpencodeDb
 from ..snapshot import default_opencode_db_path, open_opencode_ro
@@ -37,22 +39,22 @@ class OpencodeSource(AgentSource):
             note=None if available else f"数据库不存在: {default_opencode_db_path()}",
         )
 
-    def list_sessions(self, request: SessionListRequest) -> list[Session]:
-        with open_opencode_ro() as od:
-            db = OpencodeDb(od.con, db_path=od.db_path, using_snapshot=od.using_snapshot)
-            return db.list_sessions(
+    def list_sessions(self, request: SessionListRequest, *, db: Path | None = None) -> list[Session]:
+        with open_opencode_ro(db) as od:
+            odb = OpencodeDb(od.con, db_path=od.db_path, using_snapshot=od.using_snapshot)
+            return odb.list_sessions(
                 project=request.project,
                 agent=request.agent,
                 archived=request.archived,
                 limit=request.limit,
             )
 
-    def get_session(self, external_id: str) -> Session:
-        with open_opencode_ro() as od:
-            db = OpencodeDb(od.con, db_path=od.db_path, using_snapshot=od.using_snapshot)
-            return db.get_session(external_id)
+    def get_session(self, external_id: str, *, db: Path | None = None) -> Session:
+        with open_opencode_ro(db) as od:
+            odb = OpencodeDb(od.con, db_path=od.db_path, using_snapshot=od.using_snapshot)
+            return odb.get_session(external_id)
 
-    def get_content(self, external_id: str) -> SessionContent:
-        with open_opencode_ro() as od:
-            db = OpencodeDb(od.con, db_path=od.db_path, using_snapshot=od.using_snapshot)
-            return db.get_session_content(external_id)
+    def get_content(self, external_id: str, *, db: Path | None = None) -> SessionContent:
+        with open_opencode_ro(db) as od:
+            odb = OpencodeDb(od.con, db_path=od.db_path, using_snapshot=od.using_snapshot)
+            return odb.get_session_content(external_id)

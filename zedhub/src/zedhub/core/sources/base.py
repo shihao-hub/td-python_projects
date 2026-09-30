@@ -47,19 +47,20 @@ class SourceInfo:
 class AgentSource:
     """agent 数据源协议：session/message/part 侧的读写能力边界。
 
+    方法接受可选 ``db`` 路径（daemon 启动参数透传，覆盖默认探测）。
     Zed 索引不实现本协议（它是独立索引源，由 ZedDb + ThreadService 提供
     thread 查询与 session_id 关联）；只有 agent 会话源注册为 AgentSource。
     """
 
     info: SourceInfo
 
-    def list_sessions(self, request: SessionListRequest) -> list[Session]:
+    def list_sessions(self, request: SessionListRequest, *, db: Path | None = None) -> list[Session]:
         raise NotImplementedError
 
-    def get_session(self, external_id: str) -> Session:
+    def get_session(self, external_id: str, *, db: Path | None = None) -> Session:
         raise NotImplementedError
 
-    def get_content(self, external_id: str) -> SessionContent:
+    def get_content(self, external_id: str, *, db: Path | None = None) -> SessionContent:
         raise NotImplementedError
 
 

@@ -117,20 +117,18 @@ class DaemonClient:
         return self._addr
 
     def _probe(self, host: str, port: int) -> bool:
-        """health 探测（含握手校验）。"""
+        """health 探测（含握手校验）；连接失败 = 探测失败，握手失败才抛错。"""
         try:
-            status, body = self._http("GET", f"http://{host}:{port}{API_PREFIX}/health", timeout=2.0)
-            if status == 200 and body.get("ok"):
-                return True
-            if status == 409:
-                raise exc_from_payload(
-                    body.get("error", {}).get("code", "handshake_mismatch"),
-                    body.get("error", {}).get("message", "buildID mismatch"),
-                )
-        except ZedhubError:
-            raise
-        except Exception:
-            pass
+            status, body = self._http("GET", f"http://{host}:{port}{API_PREFIX}/health", timeout=1.5)
+        except DaemonUnreachableError:
+            return False  # 连不上：不算握手问题
+        if status == 200 and body.get("ok"):
+            return True
+        if status == 409:
+            raise exc_from_payload(
+                body.get("error", {}).get("code", "handshake_mismatch"),
+                body.get("error", {}).get("message", "buildID mismatch"),
+            )
         return False
 
     def _spawn(self, host: str, port: int) -> None:

@@ -199,7 +199,8 @@ def _sessions_list(params: dict, ctx: CallContext) -> Any:
             agent=_opt_str(params, "agent"),
             archived=_archived(params),
             limit=_opt_int(params, "limit"),
-        )
+        ),
+        db=ctx.opencode_db,
     )
     return _attach_zed_link(sessions, ctx)
 
@@ -209,7 +210,7 @@ def _sessions_show(params: dict, ctx: CallContext) -> Any:
     if sid is None:
         raise InvalidParamsError("param 'session_id' is required")
     src = get_source(params.get("source"))
-    return _attach_zed_link([src.get_session(sid)], ctx)[0]
+    return _attach_zed_link([src.get_session(sid, db=ctx.opencode_db)], ctx)[0]
 
 
 def _sessions_content(params: dict, ctx: CallContext) -> Any:
@@ -217,7 +218,7 @@ def _sessions_content(params: dict, ctx: CallContext) -> Any:
     if sid is None:
         raise InvalidParamsError("param 'session_id' is required")
     src = get_source(params.get("source"))
-    content = src.get_content(sid)
+    content = src.get_content(sid, db=ctx.opencode_db)
     linked = _zed_session_map(ctx)
     content.session.zed_thread_id = linked.get(sid) if linked else None
     return dump_content(content)
