@@ -336,12 +336,13 @@ def archive_export(
     project: Annotated[str, typer.Argument(help="Project path substring (case-insensitive).")],
     output: Annotated[Path, typer.Option("-o", "--output", help="Archive output file path.")],
     archived: Annotated[bool, typer.Option("--archived", help="Include archived sessions.")] = False,
+    exact: Annotated[bool, typer.Option("--exact", help="Match folder path exactly (after normalization) instead of substring.")] = False,
     host: HOST_OPT = None,
     json_out: JSON_OPT = False,
 ) -> None:
     """Export project sessions (Zed + OpenCode) to a portable SQLite archive."""
     def fn():
-        body = {"project": project, "output": str(output), "include_archived": archived}
+        body = {"project": project, "output": str(output), "include_archived": archived, "exact": exact}
         on_stage = None if json_out else _render_stage
         return DaemonClient(host).call_sse(
             "POST", f"{API_PREFIX}/archive/export", body=body, on_stage=on_stage,
@@ -358,6 +359,7 @@ def archive_export(
 def _render_archive_export(d: dict) -> None:
     size_mb = d.get("size_bytes", 0) / 1024 / 1024
     print(f"导出完成: {d['output']} ({size_mb:.2f} MB)")
+    print(f"匹配模式: {d.get('match_mode', 'substring')}")
     print(f"threads={d['thread_count']} sessions={d['session_count']} "
           f"messages={d['message_count']} parts={d['part_count']}")
 

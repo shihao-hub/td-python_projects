@@ -59,6 +59,7 @@ def export_archive(
     project: str,
     output: str,
     include_archived: bool = False,
+    exact: bool = False,
     zed_db: Path | None = None,
     opencode_db: Path | None = None,
     progress: ProgressFn = noop_progress,
@@ -82,6 +83,10 @@ def export_archive(
                 project=project_q, agent="opencode",
                 archived="all" if include_archived else "no",
             )
+            if exact:
+                # --exact：归一化后与 folder path 完全相等才命中，不带出子目录
+                want = project_q.casefold()
+                threads = [t for t in threads if any(os.path.normpath(p).casefold() == want for p in t.projects)]
     if not threads:
         raise NotFoundError(f"未找到匹配的会话: project={project!r}")
     session_ids = [t.session_id for t in threads if t.session_id]
@@ -145,6 +150,7 @@ def export_archive(
                 ("message_count", str(len(messages))),
                 ("part_count", str(len(parts))),
                 ("include_archived", str(include_archived)),
+                ("match_mode", "exact" if exact else "substring"),
             ],
         )
         arc.executemany(
@@ -175,6 +181,7 @@ def export_archive(
         "message_count": len(messages),
         "part_count": len(parts),
         "include_archived": include_archived,
+        "match_mode": "exact" if exact else "substring",
         "schema_version": ARCHIVE_SCHEMA_VERSION,
         "source_agent": ARCHIVE_SOURCE_AGENT,
     }
@@ -221,5 +228,6 @@ def inspect_archive(file: str) -> dict:
         "export_time": meta.get("export_time"),
         "source_project": meta.get("source_project"),
         "include_archived": meta.get("include_archived") == "True",
+        "match_mode": meta.get("match_mode", "substring"),
         "counts": info["counts"],
     }

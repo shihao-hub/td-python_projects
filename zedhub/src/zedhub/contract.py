@@ -55,6 +55,7 @@ class ArchiveExportBody(BaseModel):
     project: str
     output: str                       # 归档文件输出路径（用户显式指定）
     include_archived: bool = False
+    exact: bool = False               # true = 归一化后与目录路径完全相等才命中
 
 
 class ArchiveInspectBody(BaseModel):

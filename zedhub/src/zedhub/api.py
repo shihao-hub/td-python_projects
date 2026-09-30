@@ -265,6 +265,7 @@ def _archive_export(params: dict, ctx: CallContext, progress=noop_progress) -> A
     return export_archive(
         project=project, output=output,
         include_archived=bool(params.get("include_archived")),
+        exact=bool(params.get("exact")),
         zed_db=ctx.zed_db, opencode_db=ctx.opencode_db,
         progress=progress,
     )
