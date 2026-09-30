@@ -156,3 +156,31 @@ EXIT_CODE: dict[ErrorCode, int] = {
     ErrorCode.DAEMON_UNREACHABLE: 1,
     ErrorCode.INTERNAL_ERROR: 1,
 }
+
+# 错误码字符串 → 异常类反查（client 把 HTTP 错误信封还原为异常用）
+ERROR_CLASS: dict[str, type[ZedhubError]] = {
+    ErrorCode.INVALID_PARAMS.value: InvalidParamsError,
+    ErrorCode.NOT_FOUND.value: NotFoundError,
+    ErrorCode.SOURCE_NOT_SUPPORTED.value: SourceNotSupportedError,
+    ErrorCode.DATA_SOURCE_MISSING.value: DataSourceMissingError,
+    ErrorCode.SCHEMA_INCOMPATIBLE.value: SchemaError,
+    ErrorCode.SNAPSHOT_FAILED.value: SnapshotError,
+    ErrorCode.PROCESS_RUNNING.value: ProcessRunningError,
+    ErrorCode.WRITE_FAILED.value: WriteFailedError,
+    ErrorCode.VERIFY_FAILED.value: VerifyFailedError,
+    ErrorCode.DATA_DIR_ERROR.value: DataDirError,
+    ErrorCode.METHOD_NOT_SUPPORTED.value: MethodNotSupportedError,
+    ErrorCode.INVALID_REQUEST.value: InvalidRequestError,
+    ErrorCode.HANDSHAKE_MISMATCH.value: HandshakeMismatchError,
+    ErrorCode.DAEMON_UNREACHABLE.value: DaemonUnreachableError,
+    ErrorCode.INTERNAL_ERROR.value: ZedhubError,
+}
+
+
+def exc_from_payload(code: str, message: str) -> ZedhubError:
+    """按错误码字符串还原对应异常实例（client 侧使用）。"""
+    cls = ERROR_CLASS.get(code, ZedhubError)
+    exc = cls(message)
+    if cls is ZedhubError:
+        exc.code = ErrorCode.INTERNAL_ERROR
+    return exc

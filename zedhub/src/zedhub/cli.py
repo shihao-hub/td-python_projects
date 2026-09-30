@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+from typing import Annotated, Optional
 
 import typer
 
@@ -29,6 +31,8 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _version_callback(value: bool) -> None:
@@ -49,3 +53,34 @@ def main(
     ),
 ) -> None:
     """zedhub — unified Zed + OpenCode session tooling."""
+
+
+# -- daemon ------------------------------------------------------------------
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option("--host", help="Loopback bind address (127.0.0.1/localhost/::1).")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="HTTP API port.")] = 8766,
+    db: Annotated[Optional[Path], typer.Option("--db", help="Zed db.sqlite (or its dir). Defaults to Zed's live location.")] = None,
+    opencode_db: Annotated[Optional[Path], typer.Option("--opencode-db", help="opencode.db path. Defaults to auto-detect.")] = None,
+    auto_spawned: Annotated[bool, typer.Option("--auto-spawned", help="(internal) mark daemon as auto-spawned.", hidden=True)] = False,
+) -> None:
+    """Run the daemon (the only business process). Ctrl+C stops it."""
+    if host.strip("[]") not in LOOPBACK_HOSTS:
+        typer.secho(
+            f"zedhub: --host must be a loopback address (127.0.0.1/localhost/::1), got: {host}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    from .lifecycle import serve_with_lifecycle
+
+    try:
+        serve_with_lifecycle(
+            host=host, port=port, zed_db=db, opencode_db=opencode_db,
+            auto_spawned=auto_spawned,
+        )
+    except Exception as exc:
+        typer.secho(f"zedhub: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
