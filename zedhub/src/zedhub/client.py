@@ -220,3 +220,56 @@ class DaemonClient:
             return payload.get("data")
         err = payload.get("error", {})
         raise exc_from_payload(err.get("code", "internal_error"), err.get("message", f"HTTP {status}"))
+
+    # -- SSE 消费（写类长任务进度流，AC-20） --------------------------------------
+
+    def call_sse(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict,
+        on_stage=None,
+        timeout: float = 600.0,
+    ):
+        """SSE 形态执行写端点：stage 事件实时回调，result 返回，error 抛异常。"""
+        host, port = self.ensure_connected()
+        url = f"http://{host}:{port}{path}"
+        req = urllib.request.Request(url, method=method)
+        req.data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Accept", "text/event-stream")
+        req.add_header("X-Zedhub-Build", build_id())
+        try:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(raw)
+                err = payload.get("error", {})
+                raise exc_from_payload(err.get("code", "internal_error"),
+                                       err.get("message", f"HTTP {exc.code}")) from None
+            except json.JSONDecodeError:
+                raise DaemonUnreachableError(f"daemon HTTP {exc.code}: {raw[:200]}") from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise DaemonUnreachableError(f"daemon 连接失败 ({url}): {exc}") from exc
+
+        with resp:
+            event = "message"
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\n\r")
+                if line.startswith("event: "):
+                    event = line[len("event: "):]
+                elif line.startswith("data: "):
+                    data = json.loads(line[len("data: "):])
+                    if event == "stage" and on_stage is not None:
+                        on_stage(data)
+                    elif event == "result":
+                        return data
+                    elif event == "error":
+                        raise exc_from_payload(
+                            data.get("code", "internal_error"),
+                            data.get("message", "unknown error"),
+                        )
+                    event = "message"
+        raise DaemonUnreachableError("SSE 流意外结束（未收到 result/error 事件）")

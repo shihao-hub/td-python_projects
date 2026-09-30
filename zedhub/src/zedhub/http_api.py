@@ -8,6 +8,8 @@ Host 头回环校验 + 可选 buildID 握手。
 from __future__ import annotations
 
 import asyncio
+import json
+import queue
 import sys
 import time
 import traceback
@@ -16,7 +18,7 @@ from pathlib import Path
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from . import api
@@ -82,6 +84,54 @@ async def _run_in_pool(fn, *args):
     return await loop.run_in_executor(None, lambda: fn(*args))
 
 
+def _sse_event(event: str, data) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def _sse_response(endpoint: HttpEndpoint, params: dict, state) -> Response:
+    """写类端点的 SSE 形态（设计 §5/§11，AC-20）。
+
+    业务在线程池执行，进度经队列流式下发；SSE 客户端断开只丢弃进度
+    事件，业务继续执行到可验证状态（结果照常落 journal，NFR-7）。
+    """
+    q: queue.Queue = queue.Queue()
+
+    def progress(stage: str, detail: str, pct=None) -> None:
+        q.put(("stage", {"stage": stage, "detail": detail, "pct": pct}))
+
+    async def run_business():
+        try:
+            async with state.write_lock:  # 写流水线全局互斥
+                data = await _run_in_pool(api.call, endpoint.api_method, params, state.ctx, progress)
+            q.put(("result", data))
+        except ZedhubError as exc:
+            q.put(("error", exc.to_payload()))
+        except Exception:  # noqa: BLE001 — SSE 边界，任何意外都不能带崩 daemon
+            traceback.print_exc(file=sys.stderr)
+            q.put(("error", {"code": "internal_error", "message": "internal error (see daemon stderr)"}))
+        finally:
+            q.put(None)  # 流结束哨兵
+
+    task = asyncio.create_task(run_business())
+
+    async def gen():
+        try:
+            while True:
+                item = await asyncio.to_thread(q.get)
+                if item is None:
+                    break
+                event, data = item
+                yield _sse_event(event, data)
+        finally:
+            # 流结束（含客户端断开）才归还 in-flight 计数并重置空闲计时
+            state.inflight -= 1
+            state.last_activity = time.monotonic()
+        # 不 await task：断开的流不等待业务（后台完成、结果落 journal）；
+        # daemon 关闭时线程池 shutdown(wait=True) 兜底等待
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
 def _extract_params(request: Request, endpoint: HttpEndpoint, body: dict) -> dict:
     """从 query/path/body 组装业务 params（业务校验仍在 api 层）。"""
     params: dict = dict(body)
@@ -144,7 +194,14 @@ async def dispatch(request: Request) -> Response:
 
         params = _extract_params(request, endpoint, body)
         state.inflight += 1
+        use_sse = (
+            endpoint.sse
+            and "text/event-stream" in request.headers.get("accept", "")
+        )
         try:
+            if use_sse:
+                # in-flight 计数由 SSE 生成器在流结束时归还
+                return await _sse_response(endpoint, params, state)
             if endpoint.method == "POST":
                 # 写流水线全局互斥：daemon 内单一写者（读请求不受阻塞）
                 async with state.write_lock:
@@ -152,8 +209,9 @@ async def dispatch(request: Request) -> Response:
             else:
                 data = await _run_in_pool(api.call, endpoint.api_method, params, state.ctx)
         finally:
-            state.inflight -= 1
-            state.last_activity = time.monotonic()  # 空闲计时重置（请求结束时刻）
+            if not use_sse:
+                state.inflight -= 1
+                state.last_activity = time.monotonic()  # 空闲计时重置（请求结束时刻）
         count = len(data) if isinstance(data, list) else None
         return JSONResponse(_ok_payload(data, elapsed_ms=_ms(started), count=count))
     except ZedhubError as exc:

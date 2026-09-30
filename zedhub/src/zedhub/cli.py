@@ -262,6 +262,15 @@ def stats_effort(
         raise typer.Exit() from None
 
 
+def _render_stage(stage: dict, *, refresh: bool = True) -> None:
+    """SSE stage 事件的单行刷新渲染（仅人读模式）。"""
+    pct = stage.get("pct")
+    pct_disp = f"{pct:>3}%" if pct is not None else "   "
+    end = "" if refresh else "\n"
+    print(f"\r  [{pct_disp}] {stage.get('stage', '?'):<14} {stage.get('detail', '')}".ljust(78),
+          end=end, flush=True)
+
+
 @sessions_app.command("link")
 def sessions_link(
     project: Annotated[str, typer.Argument(help="Directory path or substring (case-insensitive).")],
@@ -274,18 +283,24 @@ def sessions_link(
 ) -> None:
     """Backfill OpenCode sessions into the Zed index (dry-run by default)."""
     def fn():
+        body = {
+            "project": project, "all_dirs": all, "target": target,
+            "include_subagents": include_subagents, "apply": apply,
+        }
+        if apply:
+            on_stage = None if json_out else _render_stage
+            return DaemonClient(host).call_sse(
+                "POST", f"{API_PREFIX}/sessions/link", body=body, on_stage=on_stage,
+            )
         return DaemonClient(host).call(
-            "POST", f"{API_PREFIX}/sessions/link", timeout=600.0,
-            body={
-                "project": project, "all_dirs": all, "target": target,
-                "include_subagents": include_subagents, "apply": apply,
-            },
+            "POST", f"{API_PREFIX}/sessions/link", timeout=600.0, body=body,
         )
 
     data, _ = _run_query(fn, as_json=json_out)
     if json_out:
         _emit_new(data, as_json=True)
         return
+    print()
     _render_link_result(data)
 
 
@@ -326,13 +341,18 @@ def archive_export(
 ) -> None:
     """Export project sessions (Zed + OpenCode) to a portable SQLite archive."""
     def fn():
-        return DaemonClient(host).call(
-            "POST", f"{API_PREFIX}/archive/export", timeout=600.0,
-            body={"project": project, "output": str(output), "include_archived": archived},
+        body = {"project": project, "output": str(output), "include_archived": archived}
+        on_stage = None if json_out else _render_stage
+        return DaemonClient(host).call_sse(
+            "POST", f"{API_PREFIX}/archive/export", body=body, on_stage=on_stage,
         )
 
     data, _ = _run_query(fn, as_json=json_out)
-    _emit_new(data, as_json=json_out, renderer=_render_archive_export)
+    if json_out:
+        _emit_new(data, as_json=True)
+        return
+    print()
+    _render_archive_export(data)
 
 
 def _render_archive_export(d: dict) -> None:
@@ -376,13 +396,23 @@ def archive_import(
 ) -> None:
     """Import archive into local Zed/OpenCode (dry-run by default)."""
     def fn():
+        body = {"file": str(file), "target": target, "apply": apply}
+        if apply:
+            on_stage = None if json_out else _render_stage
+            return DaemonClient(host).call_sse(
+                "POST", f"{API_PREFIX}/archive/import", body=body, on_stage=on_stage,
+            )
         return DaemonClient(host).call(
-            "POST", f"{API_PREFIX}/archive/import", timeout=600.0,
-            body={"file": str(file), "target": target, "apply": apply},
+            "POST", f"{API_PREFIX}/archive/import", timeout=600.0, body=body,
         )
 
     data, _ = _run_query(fn, as_json=json_out)
-    _emit_new(data, as_json=json_out, renderer=_render_archive_import)
+    if json_out:
+        _emit_new(data, as_json=True)
+        return
+    if apply:
+        print()
+    _render_archive_import(data)
 
 
 def _render_archive_import(d: dict) -> None:

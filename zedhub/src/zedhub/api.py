@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from .core.writes import noop_progress
+
 from pydantic import BaseModel
 
 from .core.errors import (
@@ -121,7 +123,7 @@ def _archived(params: dict) -> str:
 # -- Zed 方法（归档基线语义，AC-2） ----------------------------------------------
 
 
-def _threads_list(params: dict, ctx: CallContext) -> Any:
+def _threads_list(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     with open_snapshot(ctx.zed_db) as snap:
         with ZedDb(snap) as db:
             items = ThreadService(db).list_threads(
@@ -136,7 +138,7 @@ def _threads_list(params: dict, ctx: CallContext) -> Any:
             return dump_threads(items)
 
 
-def _threads_show(params: dict, ctx: CallContext) -> Any:
+def _threads_show(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     tid = _opt_str(params, "thread_id")
     if tid is None:
         raise InvalidParamsError("param 'thread_id' is required")
@@ -145,13 +147,13 @@ def _threads_show(params: dict, ctx: CallContext) -> Any:
             return dump_threads([ThreadService(db).get_thread(tid)])[0]
 
 
-def _projects(params: dict, ctx: CallContext) -> Any:
+def _projects(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     with open_snapshot(ctx.zed_db) as snap:
         with ZedDb(snap) as db:
             return dump_projects(ThreadService(db).projects())
 
 
-def _stats(params: dict, ctx: CallContext) -> Any:
+def _stats(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     with open_snapshot(ctx.zed_db) as snap:
         with ZedDb(snap) as db:
             return dump_stats(ThreadService(db).stats())
@@ -160,7 +162,7 @@ def _stats(params: dict, ctx: CallContext) -> Any:
 # -- source 状态与 OpenCode 会话方法 --------------------------------------------
 
 
-def _sources(params: dict, ctx: CallContext) -> Any:
+def _sources(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     return [
         {
             "source_id": i.source_id,
@@ -191,7 +193,7 @@ def _attach_zed_link(sessions: list[Session], ctx: CallContext) -> list[dict]:
     return dump_sessions(sessions)
 
 
-def _sessions_list(params: dict, ctx: CallContext) -> Any:
+def _sessions_list(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     src = get_source(_opt_str(params, "source"))
     sessions = src.list_sessions(
         SessionListRequest(
@@ -205,7 +207,7 @@ def _sessions_list(params: dict, ctx: CallContext) -> Any:
     return _attach_zed_link(sessions, ctx)
 
 
-def _sessions_show(params: dict, ctx: CallContext) -> Any:
+def _sessions_show(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     sid = _opt_str(params, "session_id")
     if sid is None:
         raise InvalidParamsError("param 'session_id' is required")
@@ -213,7 +215,7 @@ def _sessions_show(params: dict, ctx: CallContext) -> Any:
     return _attach_zed_link([src.get_session(sid, db=ctx.opencode_db)], ctx)[0]
 
 
-def _sessions_content(params: dict, ctx: CallContext) -> Any:
+def _sessions_content(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     sid = _opt_str(params, "session_id")
     if sid is None:
         raise InvalidParamsError("param 'session_id' is required")
@@ -224,7 +226,7 @@ def _sessions_content(params: dict, ctx: CallContext) -> Any:
     return dump_content(content)
 
 
-def _stats_effort(params: dict, ctx: CallContext) -> Any:
+def _stats_effort(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     from .core.analytics import resolve_effort_report
 
     report = resolve_effort_report(ctx.opencode_db)
@@ -232,7 +234,7 @@ def _stats_effort(params: dict, ctx: CallContext) -> Any:
     return out
 
 
-def _sessions_link(params: dict, ctx: CallContext) -> Any:
+def _sessions_link(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     from .core.linking import run_link
 
     project = _opt_str(params, "project")
@@ -249,10 +251,11 @@ def _sessions_link(params: dict, ctx: CallContext) -> Any:
         apply=bool(params.get("apply")),
         zed_db=ctx.zed_db,
         opencode_db=ctx.opencode_db,
+        progress=progress,
     )
 
 
-def _archive_export(params: dict, ctx: CallContext) -> Any:
+def _archive_export(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     from .core.archive import export_archive
 
     project = _opt_str(params, "project")
@@ -263,10 +266,11 @@ def _archive_export(params: dict, ctx: CallContext) -> Any:
         project=project, output=output,
         include_archived=bool(params.get("include_archived")),
         zed_db=ctx.zed_db, opencode_db=ctx.opencode_db,
+        progress=progress,
     )
 
 
-def _archive_inspect(params: dict, ctx: CallContext) -> Any:
+def _archive_inspect(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     from .core.archive import inspect_archive
 
     file = _opt_str(params, "file")
@@ -275,7 +279,7 @@ def _archive_inspect(params: dict, ctx: CallContext) -> Any:
     return inspect_archive(file)
 
 
-def _archive_import(params: dict, ctx: CallContext) -> Any:
+def _archive_import(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     from .core.migration import import_archive
 
     file = _opt_str(params, "file")
@@ -285,12 +289,13 @@ def _archive_import(params: dict, ctx: CallContext) -> Any:
     return import_archive(
         file=file, target=target, apply=bool(params.get("apply")),
         zed_db=ctx.zed_db, opencode_db=ctx.opencode_db,
+        progress=progress,
     )
 
 
 # -- 注册表 -----------------------------------------------------------------------
 
-METHODS: dict[str, Callable[[dict, CallContext], Any]] = {
+METHODS: dict[str, Callable[..., Any]] = {
     "threads.list": _threads_list,
     "threads.show": _threads_show,
     "projects": _projects,
@@ -307,7 +312,12 @@ METHODS: dict[str, Callable[[dict, CallContext], Any]] = {
 }
 
 
-def call(method: str, params: dict, ctx: CallContext) -> Any:
+def call(
+    method: str,
+    params: dict,
+    ctx: CallContext,
+    progress=None,
+) -> Any:
     """分发一次方法调用，返回 JSON-ready payload。
 
     业务方法抛 ZedhubError 子类（入口层映射到各自呈现）；未注册方法抛
@@ -318,4 +328,4 @@ def call(method: str, params: dict, ctx: CallContext) -> Any:
         raise MethodNotSupportedError(
             f"method not supported: {method} (available: {', '.join(sorted(METHODS))})"
         )
-    return fn(params if isinstance(params, dict) else {}, ctx)
+    return fn(params if isinstance(params, dict) else {}, ctx, progress or noop_progress)
