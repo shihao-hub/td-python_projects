@@ -309,6 +309,101 @@ def _render_link_result(d: dict) -> None:
         print("dry-run 完成；关闭 Zed 与 opencode 后加 --apply 执行实际补登")
 
 
+# -- archive（导出/检查/导入） ---------------------------------------------------
+
+
+archive_app = typer.Typer(help="Portable SQLite archives for cross-machine migration.", no_args_is_help=True)
+app.add_typer(archive_app, name="archive")
+
+
+@archive_app.command("export")
+def archive_export(
+    project: Annotated[str, typer.Argument(help="Project path substring (case-insensitive).")],
+    output: Annotated[Path, typer.Option("-o", "--output", help="Archive output file path.")],
+    archived: Annotated[bool, typer.Option("--archived", help="Include archived sessions.")] = False,
+    host: HOST_OPT = None,
+    json_out: JSON_OPT = False,
+) -> None:
+    """Export project sessions (Zed + OpenCode) to a portable SQLite archive."""
+    def fn():
+        return DaemonClient(host).call(
+            "POST", f"{API_PREFIX}/archive/export", timeout=600.0,
+            body={"project": project, "output": str(output), "include_archived": archived},
+        )
+
+    data, _ = _run_query(fn, as_json=json_out)
+    _emit_new(data, as_json=json_out, renderer=_render_archive_export)
+
+
+def _render_archive_export(d: dict) -> None:
+    size_mb = d.get("size_bytes", 0) / 1024 / 1024
+    print(f"导出完成: {d['output']} ({size_mb:.2f} MB)")
+    print(f"threads={d['thread_count']} sessions={d['session_count']} "
+          f"messages={d['message_count']} parts={d['part_count']}")
+
+
+@archive_app.command("inspect")
+def archive_inspect(
+    file: Annotated[Path, typer.Argument(help="Archive file path.")],
+    host: HOST_OPT = None,
+    json_out: JSON_OPT = False,
+) -> None:
+    """Inspect an archive: version, source_agent, table counts."""
+    def fn():
+        return DaemonClient(host).call(
+            "POST", f"{API_PREFIX}/archive/inspect", body={"file": str(file)}
+        )
+
+    data, _ = _run_query(fn, as_json=json_out)
+    _emit_new(data, as_json=json_out, renderer=_render_archive_inspect)
+
+
+def _render_archive_inspect(d: dict) -> None:
+    print(f"file          : {d['file']}")
+    print(f"schema_version: {d['schema_version']}  source_agent: {d['source_agent']}")
+    print(f"export_time   : {d.get('export_time')}  source_project: {d.get('source_project')}")
+    for k, v in (d.get("counts") or {}).items():
+        print(f"  {k:<20} {v}")
+
+
+@archive_app.command("import")
+def archive_import(
+    file: Annotated[Path, typer.Argument(help="Archive file path.")],
+    target: Annotated[str, typer.Option("--target", help="Target directory (must exist).")],
+    apply: Annotated[bool, typer.Option("--apply", help="Actually write (default: dry-run plan).")] = False,
+    host: HOST_OPT = None,
+    json_out: JSON_OPT = False,
+) -> None:
+    """Import archive into local Zed/OpenCode (dry-run by default)."""
+    def fn():
+        return DaemonClient(host).call(
+            "POST", f"{API_PREFIX}/archive/import", timeout=600.0,
+            body={"file": str(file), "target": target, "apply": apply},
+        )
+
+    data, _ = _run_query(fn, as_json=json_out)
+    _emit_new(data, as_json=json_out, renderer=_render_archive_import)
+
+
+def _render_archive_import(d: dict) -> None:
+    state = "APPLIED" if d.get("applied") else "DRY-RUN"
+    print(f"[{state}] status={d.get('status')}  target={d.get('target')}")
+    if "plan" in d:
+        p = d["plan"]
+        print(f"plan: threads={p['threads']} sessions={p['sessions']} "
+              f"messages={p['messages']} parts={p['parts']}")
+        print(d.get("note", ""))
+    if d.get("applied"):
+        w = d.get("written") or {}
+        print(f"written: threads={w.get('threads')} sessions={w.get('sessions')}")
+        print(f"verify: {d.get('verify')}")
+        print(f"operation={d.get('operation_id')}")
+        for b in d.get("backup_dirs") or []:
+            print(f"backup: {b}")
+    if d.get("note") and not d.get("applied"):
+        print(d["note"])
+
+
 # -- programmatic protocols ----------------------------------------------------
 
 

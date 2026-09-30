@@ -252,6 +252,42 @@ def _sessions_link(params: dict, ctx: CallContext) -> Any:
     )
 
 
+def _archive_export(params: dict, ctx: CallContext) -> Any:
+    from .core.archive import export_archive
+
+    project = _opt_str(params, "project")
+    output = _opt_str(params, "output")
+    if project is None or output is None:
+        raise InvalidParamsError("params 'project' and 'output' are required")
+    return export_archive(
+        project=project, output=output,
+        include_archived=bool(params.get("include_archived")),
+        zed_db=ctx.zed_db, opencode_db=ctx.opencode_db,
+    )
+
+
+def _archive_inspect(params: dict, ctx: CallContext) -> Any:
+    from .core.archive import inspect_archive
+
+    file = _opt_str(params, "file")
+    if file is None:
+        raise InvalidParamsError("param 'file' is required")
+    return inspect_archive(file)
+
+
+def _archive_import(params: dict, ctx: CallContext) -> Any:
+    from .core.migration import import_archive
+
+    file = _opt_str(params, "file")
+    target = _opt_str(params, "target")
+    if file is None or target is None:
+        raise InvalidParamsError("params 'file' and 'target' are required")
+    return import_archive(
+        file=file, target=target, apply=bool(params.get("apply")),
+        zed_db=ctx.zed_db, opencode_db=ctx.opencode_db,
+    )
+
+
 # -- 注册表 -----------------------------------------------------------------------
 
 METHODS: dict[str, Callable[[dict, CallContext], Any]] = {
@@ -265,6 +301,9 @@ METHODS: dict[str, Callable[[dict, CallContext], Any]] = {
     "sessions.content": _sessions_content,
     "stats.effort": _stats_effort,
     "sessions.link": _sessions_link,
+    "archive.export": _archive_export,
+    "archive.inspect": _archive_inspect,
+    "archive.import": _archive_import,
 }
 
 
