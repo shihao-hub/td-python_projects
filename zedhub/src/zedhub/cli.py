@@ -261,6 +261,29 @@ def stats_effort(
         raise typer.Exit() from None
 
 
+# -- programmatic protocols ----------------------------------------------------
+
+
+@app.command("rpc")
+def rpc_cmd() -> None:
+    """JSON-RPC 2.0 over line-delimited stdio (frozen compatibility shell).
+
+    rpc.discover is answered locally (no daemon); the four business methods
+    are forwarded to the daemon over HTTP.
+    """
+    from .rpc import serve
+
+    serve()
+
+
+@app.command("mcp")
+def mcp_cmd() -> None:
+    """MCP bridge: stdio(MCP) <-> HTTP daemon (read-only tools only)."""
+    from .mcp_bridge import serve_mcp
+
+    serve_mcp()
+
+
 # -- sessions（新命令：默认人读、--json） ---------------------------------------
 
 

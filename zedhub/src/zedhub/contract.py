@@ -158,6 +158,13 @@ def find_endpoint(method: str, path: str) -> HttpEndpoint | None:
     return None
 
 
+# GET query 参数的类型标注（query string 天然是 str；HTTP 层按此 coerce，
+# 让 GET 与 POST body / RPC params 的类型校验口径一致）。参数名全局唯一。
+QUERY_PARAM_TYPES: dict[str, str] = {
+    "limit": "integer",
+}
+
+
 # -- MCP 工具元数据（桥注册与 schema 导出同源） -----------------------------------
 
 
@@ -175,11 +182,12 @@ class ToolMeta:
     params: tuple[ParamDoc, ...] = ()
     api_method: str = ""               # 桥转发的 HTTP 端点对应业务方法
     legacy: bool = False               # 存量兼容名（FR-9，不迁移）
+    result_type: str = "object"        # "array" | "object"（签名 return 标注用）
 
 
 MCP_TOOLS: tuple[ToolMeta, ...] = (
     ToolMeta(
-        name="threads_list", legacy=True, api_method="threads.list",
+        name="threads_list", legacy=True, api_method="threads.list", result_type="array",
         summary="List agent threads, newest first.",
         params=(
             ParamDoc("project", "Substring match on project path."),
@@ -197,7 +205,7 @@ MCP_TOOLS: tuple[ToolMeta, ...] = (
         params=(ParamDoc("thread_id", "Thread uuid (see threads_list).", required=True),),
     ),
     ToolMeta(
-        name="projects", legacy=True, api_method="projects",
+        name="projects", legacy=True, api_method="projects", result_type="array",
         summary="Per-folder project statistics (multi-root threads count in every folder).",
     ),
     ToolMeta(
@@ -205,7 +213,7 @@ MCP_TOOLS: tuple[ToolMeta, ...] = (
         summary="Global overview: totals, agents, workspace combos, monthly activity.",
     ),
     ToolMeta(
-        name="zedhub.sessions.list", api_method="sessions.list",
+        name="zedhub.sessions.list", api_method="sessions.list", result_type="array",
         summary="List agent sessions (default source: opencode), newest first.",
         params=(
             ParamDoc("source", "Source id; only 'opencode' is implemented."),

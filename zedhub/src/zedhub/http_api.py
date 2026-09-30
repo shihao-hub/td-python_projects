@@ -87,11 +87,21 @@ def _extract_params(request: Request, endpoint: HttpEndpoint, body: dict) -> dic
     params: dict = dict(body)
     if endpoint.method == "GET":
         for key in request.query_params.keys():
-            params.setdefault(key, request.query_params[key])
+            value = request.query_params[key]
+            # query string 天然 str：按契约类型 coerce，与 body/RPC 口径一致
+            from .contract import QUERY_PARAM_TYPES
+
+            if QUERY_PARAM_TYPES.get(key) == "integer":
+                try:
+                    value = int(value)
+                except ValueError:
+                    raise InvalidParamsError(
+                        f"param '{key}' must be an integer, got {value!r}"
+                    ) from None
+            params.setdefault(key, value)
         for pp in endpoint.path_params:
             if pp in request.path_params:
                 params[pp] = request.path_params[pp]
-    # POST body 模型字段映射 path 参数（如 thread_id 类）不适用于当前端点
     return params
 
 
