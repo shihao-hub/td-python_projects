@@ -1,7 +1,9 @@
 """跨 agent 的源能力协议与注册表（FR-10 / NFR-6）。
 
-- 本版本仅注册 `opencode`；Pi / Claude Code / Codex / Antigravity 未实现，
-  查询一律 `source_not_supported`，不得伪造为空结果（AC-13）。
+- 结构化会话源当前仅 `opencode`；claude-code/codex/antigravity 已注册为
+  **EXPORT-only 文件级源**（仅 `archive export`，schema v2，不支持会话
+  查询——查询一律 `source_not_supported`，不得伪造为空结果，AC-13）；
+- Pi 未实现，查询 `source_not_supported`；
 - `source_id` 全局唯一；注册表只增不改已有条目语义。
 - source 方法不向入口层暴露数据库连接、游标或 agent 专属表对象。
 """
@@ -16,7 +18,7 @@ from ..errors import SourceNotSupportedError
 from ..model import Session, SessionContent, SessionListRequest
 
 # 规划中但未实现的 source（Availability.NOT_IMPLEMENTED 的固定清单）
-PLANNED_SOURCES: tuple[str, ...] = ("pi", "claude-code", "codex", "antigravity")
+PLANNED_SOURCES: tuple[str, ...] = ("pi",)
 
 
 class Availability(str, Enum):

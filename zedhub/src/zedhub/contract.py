@@ -56,6 +56,7 @@ class ArchiveExportBody(BaseModel):
     output: str                       # 归档文件输出路径（用户显式指定）
     include_archived: bool = False
     exact: bool = False               # true = 归一化后与目录路径完全相等才命中
+    source: str = "opencode"          # opencode(v1) | claude-code | codex | antigravity(v2)
 
 
 class ArchiveInspectBody(BaseModel):
@@ -129,7 +130,8 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
     ),
     HttpEndpoint(
         method="POST", path=f"{API_PREFIX}/archive/export", api_method="archive.export",
-        summary="Export project sessions to a portable SQLite archive.",
+        summary="Export project sessions to a portable SQLite archive"
+                " (source: opencode=v1 | claude-code/codex/antigravity=v2).",
         body_model=ArchiveExportBody, sse=True,
     ),
     HttpEndpoint(

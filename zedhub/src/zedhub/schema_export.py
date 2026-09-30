@@ -134,7 +134,7 @@ def _cli_channel() -> dict:
             "stats effort": "OpenCode 启动模型×档位统计（--watch/-i）",
             "sessions list/show/content": "agent 会话查询（--source/--project/--format/--out）",
             "sessions link": "补登（--all/--target/--include-subagents/--apply）",
-            "archive export/inspect/import": "归档导出/检查/导入（-o/--target/--apply）",
+            "archive export/inspect/import": "归档导出/检查/导入（-o/--source/--target/--apply）",
             "rpc": "JSON-RPC 兼容薄壳（stdin/stdout）",
             "mcp": "MCP 桥（stdio）",
             "schema": "本导出（--channel）",

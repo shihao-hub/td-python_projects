@@ -6,6 +6,15 @@
   再 Zed 提交、最后分别复查；
 - 任一库提交后另一库失败：保留 operation journal、ID 映射、备份和
   ``partial``/``unknown`` 状态，禁止报告成功；本期不自动回滚已提交库。
+
+v2（claude-code/codex/antigravity 文件级归档）导入边界：
+- ``_load_archive`` 按 ``schema_version`` + ``source_agent`` 分派 v1/v2，
+  互不猜测；未知版本/来源一律 SchemaError；
+- apply 流程：进程检查（zed+opencode；各 agent CLI 是 node 子进程，
+  tasklist 名匹配不可靠，源数据文件靠「已存在即跳过」保证安全）→ Zed db
+  备份 → 先写源数据文件（字节写回，目标文件已存在一律 skip）→ 再写 Zed
+  threads（新 thread_id，session_id 原样保留——它是文件名锚点不能重映射）；
+- Zed 阶段失败 → ``partial``：源文件已落盘且 skip 幂等，重跑安全。
 """
 
 from __future__ import annotations
@@ -17,7 +26,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from .archive import ARCHIVE_SCHEMA_VERSION, ARCHIVE_SOURCE_AGENT
+from .agent_paths import FILE_SOURCES, agent_data_root, agent_id_for
+from .archive import ARCHIVE_SCHEMA_VERSION, ARCHIVE_SCHEMA_VERSION_V2, ARCHIVE_SOURCE_AGENT
 from .backup import backup_database
 from .errors import (
     DataSourceMissingError,
@@ -26,6 +36,7 @@ from .errors import (
     VerifyFailedError,
 )
 from .journal import (
+    STATUS_FILES_COMMITTED,
     STATUS_OPENCODE_COMMITTED,
     STATUS_PARTIAL,
     STATUS_PLANNED,
@@ -63,6 +74,7 @@ def _new_prefixed_id(prefix: str) -> str:
 
 
 def _load_archive(file: Path) -> dict:
+    """读取归档并按 schema_version + source_agent 分派 v1/v2，互不猜测。"""
     con = sqlite3.connect(f"file:{file}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
@@ -70,37 +82,63 @@ def _load_archive(file: Path) -> dict:
             meta = {r["key"]: r["value"] for r in con.execute("SELECT key, value FROM _archive_meta")}
         except sqlite3.DatabaseError as exc:
             raise SchemaError(f"不是可读的 zedhub 归档: {file} ({exc})") from exc
-        if meta.get("schema_version") != ARCHIVE_SCHEMA_VERSION:
+        version = meta.get("schema_version")
+
+        if version == ARCHIVE_SCHEMA_VERSION:
+            # v1（opencode 结构化 5 表）
+            if meta.get("source_agent") != ARCHIVE_SOURCE_AGENT:
+                raise SchemaError(
+                    f"归档 source_agent 不识别: {meta.get('source_agent')!r}"
+                    f"（v1 仅支持 {ARCHIVE_SOURCE_AGENT}）"
+                )
+            sessions = con.execute(
+                "SELECT id, project_id, directory, title, version, agent, model,"
+                "       time_created, time_archived FROM opencode_sessions"
+            ).fetchall()
+            messages = con.execute(
+                "SELECT id, session_id, time_created, time_updated, data"
+                "  FROM opencode_messages"
+            ).fetchall()
+            parts = con.execute(
+                "SELECT id, message_id, session_id, time_created, time_updated, data"
+                "  FROM opencode_parts"
+            ).fetchall()
+        elif version == ARCHIVE_SCHEMA_VERSION_V2:
+            # v2（文件级：Zed threads + agent_files 字节 blob）
+            source = meta.get("source_agent")
+            if source not in FILE_SOURCES:
+                raise SchemaError(
+                    f"归档 source_agent 不识别: {source!r}"
+                    f"（v2 仅支持 {', '.join(FILE_SOURCES)}）"
+                )
+            sessions, messages, parts = [], [], []
+        else:
             raise SchemaError(
-                f"归档 schema_version 不识别: {meta.get('schema_version')!r}"
-                f"（本版本仅支持 {ARCHIVE_SCHEMA_VERSION}），不猜测旧/新格式"
+                f"归档 schema_version 不识别: {version!r}"
+                f"（本版本支持 {ARCHIVE_SCHEMA_VERSION}/{ARCHIVE_SCHEMA_VERSION_V2}），"
+                f"不猜测旧/新格式"
             )
-        if meta.get("source_agent") != ARCHIVE_SOURCE_AGENT:
-            raise SchemaError(
-                f"归档 source_agent 不识别: {meta.get('source_agent')!r}"
-                f"（本版本仅支持 {ARCHIVE_SOURCE_AGENT}）"
-            )
+
         threads = con.execute(
             "SELECT thread_id, session_id, agent_id, title, title_override,"
             "       folder_paths, folder_paths_order, archived, created_at,"
             "       updated_at, interacted_at FROM zed_threads"
         ).fetchall()
-        sessions = con.execute(
-            "SELECT id, project_id, directory, title, version, agent, model,"
-            "       time_created, time_archived FROM opencode_sessions"
-        ).fetchall()
-        messages = con.execute(
-            "SELECT id, session_id, time_created, time_updated, data"
-            "  FROM opencode_messages"
-        ).fetchall()
-        parts = con.execute(
-            "SELECT id, message_id, session_id, time_created, time_updated, data"
-            "  FROM opencode_parts"
-        ).fetchall()
-        return {
-            "meta": meta, "threads": threads, "sessions": sessions,
-            "messages": messages, "parts": parts,
+        out = {
+            "schema_version": version, "meta": meta, "threads": threads,
+            "sessions": sessions, "messages": messages, "parts": parts,
         }
+        if version == ARCHIVE_SCHEMA_VERSION_V2:
+            files = con.execute(
+                "SELECT source, session_id, rel_path, size_bytes, content"
+                "  FROM agent_files"
+            ).fetchall()
+            for r in files:
+                if r["content"] is None:
+                    raise SchemaError(f"归档 agent_files 缺少内容: {r['rel_path']}")
+            out["files"] = files
+            out["source"] = meta["source_agent"]
+        return out
     finally:
         con.close()
 
@@ -149,6 +187,11 @@ def import_archive(
 
     progress("validate", "读取归档", 5)
     arc = _load_archive(f)
+    if arc["schema_version"] == ARCHIVE_SCHEMA_VERSION_V2:
+        return _import_archive_v2(
+            f=f, target_dir=target_dir, arc=arc, apply=apply,
+            zed_db=zed_db, progress=progress,
+        )
     n_threads, n_sessions = len(arc["threads"]), len(arc["sessions"])
     n_messages, n_parts = len(arc["messages"]), len(arc["parts"])
     progress("validate", f"thread={n_threads} session={n_sessions} message={n_messages} part={n_parts}", 10)
@@ -349,5 +392,196 @@ def import_archive(
         "target": target_dir,
         "written": operation.counts["written"],
         "verify": {"zed_threads": zed_count, "opencode_sessions": oc_count},
+        "backup_dirs": operation.backup_dirs,
+    }
+
+
+def _import_archive_v2(
+    *,
+    f: Path,
+    target_dir: str,
+    arc: dict,
+    apply: bool,
+    zed_db: Path | None,
+    progress: ProgressFn,
+) -> dict:
+    """v2 导入：源数据文件字节写回 + Zed threads 补登（默认 dry-run）。"""
+    source = arc["source"]
+    files = arc["files"]
+    n_threads = len(arc["threads"])
+    n_files = len(files)
+    n_sessions = int(arc["meta"].get("session_count") or 0)
+    n_missing = int(arc["meta"].get("missing_session_count") or 0)
+    total_bytes = sum(r["size_bytes"] or 0 for r in files)
+    progress(
+        "validate",
+        f"thread={n_threads} session={n_sessions} file={n_files}"
+        f" bytes={total_bytes} missing={n_missing}",
+        10,
+    )
+
+    zed = resolve_db_path(zed_db, default_zed_db_dir() / "db.sqlite")
+    if not zed.exists():
+        raise DataSourceMissingError(f"Zed 数据库不存在: {zed}")
+    root = agent_data_root(source)
+
+    operation = OperationRecord(
+        operation_id=new_operation_id(),
+        kind="archive.import",
+        params={"file": str(f), "target": target_dir, "apply": apply,
+                "schema_version": ARCHIVE_SCHEMA_VERSION_V2, "source": source},
+        counts={"threads": n_threads, "sessions": n_sessions, "files": n_files,
+                "total_bytes": total_bytes, "missing_sessions": n_missing},
+    )
+    save_operation(operation)
+
+    def plan_payload(status: str, note: str | None = None) -> dict:
+        out = {
+            "applied": False,
+            "operation_id": operation.operation_id,
+            "status": status,
+            "file": str(f),
+            "target": target_dir,
+            "schema_version": ARCHIVE_SCHEMA_VERSION_V2,
+            "source": source,
+            "plan": {"threads": n_threads, "sessions": n_sessions,
+                     "files": n_files, "total_bytes": total_bytes,
+                     "missing_sessions": n_missing},
+            "meta": {k: arc["meta"].get(k) for k in
+                     ("export_time", "source_project", "include_archived")},
+            "backup_dirs": operation.backup_dirs,
+        }
+        if note:
+            out["note"] = note
+        return out
+
+    if not apply:
+        progress("validate", "dry-run 完成", 100)
+        return plan_payload(
+            STATUS_PLANNED,
+            "dry-run 完成；关闭 Zed 后加 --apply 执行实际导入"
+            + (f"（注意：{n_missing} 个会话在归档时即无数据文件）" if n_missing else ""),
+        )
+
+    # -- apply 前置检查：写 Zed db 是硬竞态；agent CLI 是 node 子进程，    --
+    # -- tasklist 名匹配不可靠，源数据文件安全靠「已存在即跳过」机制保证   --
+    running = find_running()
+    assert_writable(running)
+    progress("process_check", "未检测到 opencode/zed 进程", 15)
+
+    zed_backup = backup_database(zed, operation.operation_id)
+    operation.backup_dirs.append(str(zed_backup))
+    save_operation(operation)
+    progress("backup", f"备份: {zed_backup.name}", 20)
+
+    # -- 阶段 1：写源数据文件（字节写回；已存在一律 skip，从机制上避免     --
+    # -- 写坏在用文件，也让中断重跑幂等）                                   --
+    root_resolved = root.resolve()
+    written = skipped = 0
+    for r in files:
+        dest = (root / r["rel_path"]).resolve()
+        try:
+            dest.relative_to(root_resolved)  # 防目录逃逸
+        except ValueError:
+            operation.error = f"归档 rel_path 逃逸数据根: {r['rel_path']}"
+            save_operation(operation)
+            raise SchemaError(operation.error)
+        if dest.exists():
+            skipped += 1
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(r["content"])
+        written += 1
+    operation.set_status(STATUS_FILES_COMMITTED)
+    operation.counts["files_written"] = written
+    operation.counts["files_skipped"] = skipped
+    save_operation(operation)
+    progress("write", f"源文件落盘: written={written} skipped={skipped}", 40)
+
+    # -- 阶段 2：写 Zed threads（新 thread_id；session_id 原样保留——       --
+    # -- 它是数据文件名锚点不能重映射；已存在的 session_id 跳过防重复补登） --
+    existing_sids = ro_query(
+        zed, "SELECT session_id FROM sidebar_threads WHERE session_id IS NOT NULL"
+    )
+    existing = {row[0] for row in existing_sids}
+    zed_rows = [
+        (
+            uuid.uuid4().bytes, t["session_id"], t["agent_id"],
+            t["title"], t["title_override"], target_dir, "0", target_dir, "0",
+            t["archived"], t["created_at"], t["updated_at"], t["interacted_at"], None,
+        )
+        for t in arc["threads"] if t["session_id"] and t["session_id"] not in existing
+    ]
+    threads_skipped = sum(1 for t in arc["threads"] if t["session_id"] and t["session_id"] in existing)
+    if zed_rows:
+        try:
+            run_write_transaction(
+                zed, [(_ZED_INSERT_SQL, zed_rows)],
+                operation=operation, stage="zed_committed", progress=progress,
+            )
+        except Exception as exc:
+            # 源文件已落盘且 skip 幂等：明确 partial，重跑安全
+            operation.set_status(STATUS_PARTIAL)
+            operation.error = f"Zed 阶段失败（源文件已落盘，重跑安全）: {exc}"
+            save_operation(operation)
+            raise VerifyFailedError(
+                f"导入部分完成：源数据文件已写入、Zed 失败。重跑 import --apply 可续传，"
+                f"或检查备份目录恢复。operation={operation.operation_id}, "
+                f"backup={operation.backup_dirs}"
+            ) from exc
+        checkpoint_wal(zed, operation_id=operation.operation_id)
+    else:
+        operation.set_status(STATUS_ZED_COMMITTED)
+        save_operation(operation)
+    operation.counts["threads_written"] = len(zed_rows)
+    operation.counts["threads_skipped"] = threads_skipped
+    progress("write", f"Zed 提交: thread={len(zed_rows)} skipped={threads_skipped}", 75)
+
+    # -- 阶段 3：复查（文件存在计数 + Zed 行计数） -----------------------------
+    try:
+        files_present = sum(1 for r in files if (root / r["rel_path"]).is_file())
+        zed_count = ro_query(
+            zed,
+            "SELECT count(*) c FROM sidebar_threads WHERE folder_paths = ? AND agent_id = ?",
+            (target_dir, agent_id_for(source)),
+        )[0][0]
+    except Exception as exc:
+        operation.set_status(STATUS_UNKNOWN)
+        operation.error = f"复查查询失败（数据可能已写入）: {exc}"
+        save_operation(operation)
+        raise VerifyFailedError(
+            f"导入后复查查询失败，结果未知。operation={operation.operation_id}, "
+            f"backup={operation.backup_dirs}"
+        ) from exc
+
+    if files_present < n_files or zed_count < len(zed_rows):
+        operation.set_status(STATUS_PARTIAL)
+        operation.error = (
+            f"复查数量不足: files {files_present}/{n_files}, "
+            f"zed {zed_count}/{len(zed_rows)}（目标目录可能已有历史数据，请核对）"
+        )
+        save_operation(operation)
+        raise VerifyFailedError(
+            f"导入后复查与计划不一致（{operation.error}），结果状态未知，"
+            f"请检查备份。operation={operation.operation_id}"
+        )
+
+    operation.set_status(STATUS_VERIFIED)
+    operation.counts["written"] = {
+        "threads": len(zed_rows), "threads_skipped": threads_skipped,
+        "files": written, "files_skipped": skipped,
+    }
+    save_operation(operation)
+    progress("verify", f"复查通过: files={files_present}/{n_files} zed={zed_count}", 100)
+    return {
+        "applied": True,
+        "operation_id": operation.operation_id,
+        "status": STATUS_VERIFIED,
+        "file": str(f),
+        "target": target_dir,
+        "schema_version": ARCHIVE_SCHEMA_VERSION_V2,
+        "source": source,
+        "written": operation.counts["written"],
+        "verify": {"zed_threads": zed_count, "files_present": files_present},
         "backup_dirs": operation.backup_dirs,
     }

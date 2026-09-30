@@ -3,6 +3,9 @@
 状态机（固定）：``planned → opencode_committed → zed_committed → verified``
 或任一阶段失败后的 ``partial`` / ``unknown``。
 
+v2 归档导入（文件级源）走 ``planned → files_committed → zed_committed →
+verified``：不写 OpenCode，阶段 1 是源数据文件落盘。
+
 - 只记录恢复所需的最小信息：操作状态、参数摘要、备份位置、ID 映射与
   已提交阶段；不保存会话正文副本。
 - journal 在验证完成后保留（人工/专用恢复动作使用），原子写防止半截 JSON。
@@ -21,6 +24,7 @@ from .paths import data_subdir
 
 STATUS_PLANNED = "planned"
 STATUS_OPENCODE_COMMITTED = "opencode_committed"
+STATUS_FILES_COMMITTED = "files_committed"
 STATUS_ZED_COMMITTED = "zed_committed"
 STATUS_VERIFIED = "verified"
 STATUS_PARTIAL = "partial"
@@ -46,7 +50,7 @@ class OperationRecord:
 
     def set_status(self, status: str) -> None:
         self.status = status
-        if status in (STATUS_OPENCODE_COMMITTED, STATUS_ZED_COMMITTED):
+        if status in (STATUS_OPENCODE_COMMITTED, STATUS_FILES_COMMITTED, STATUS_ZED_COMMITTED):
             self.committed_stages.append(status)
         self.updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 

@@ -337,12 +337,14 @@ def archive_export(
     output: Annotated[Path, typer.Option("-o", "--output", help="Archive output file path.")],
     archived: Annotated[bool, typer.Option("--archived", help="Include archived sessions.")] = False,
     exact: Annotated[bool, typer.Option("--exact", help="Match folder path exactly (after normalization) instead of substring.")] = False,
+    source: Annotated[str, typer.Option("--source", help="Session source: opencode (v1 archive) | claude-code | codex | antigravity (v2 archive, Zed threads + raw data files).")] = "opencode",
     host: HOST_OPT = None,
     json_out: JSON_OPT = False,
 ) -> None:
-    """Export project sessions (Zed + OpenCode) to a portable SQLite archive."""
+    """Export project sessions to a portable SQLite archive."""
     def fn():
-        body = {"project": project, "output": str(output), "include_archived": archived, "exact": exact}
+        body = {"project": project, "output": str(output), "include_archived": archived,
+                "exact": exact, "source": source}
         on_stage = None if json_out else _render_stage
         return DaemonClient(host).call_sse(
             "POST", f"{API_PREFIX}/archive/export", body=body, on_stage=on_stage,
@@ -359,9 +361,20 @@ def archive_export(
 def _render_archive_export(d: dict) -> None:
     size_mb = d.get("size_bytes", 0) / 1024 / 1024
     print(f"导出完成: {d['output']} ({size_mb:.2f} MB)")
-    print(f"匹配模式: {d.get('match_mode', 'substring')}")
-    print(f"threads={d['thread_count']} sessions={d['session_count']} "
-          f"messages={d['message_count']} parts={d['part_count']}")
+    print(f"匹配模式: {d.get('match_mode', 'substring')}  source: {d.get('source_agent')}"
+          f"  schema: v{d.get('schema_version')}")
+    if d.get("schema_version") == "2":
+        total_kb = d.get("total_bytes", 0) / 1024
+        print(f"threads={d['thread_count']} sessions={d['session_count']} "
+              f"files={d.get('file_count')} ({total_kb:.0f} KB) "
+              f"missing_sessions={d.get('missing_session_count', 0)}")
+        for sid in (d.get("missing_session_ids") or [])[:10]:
+            print(f"  missing: {sid}")
+        if len(d.get("missing_session_ids") or []) > 10:
+            print(f"  ... 共 {len(d['missing_session_ids'])} 个 missing")
+    else:
+        print(f"threads={d['thread_count']} sessions={d['session_count']} "
+              f"messages={d['message_count']} parts={d['part_count']}")
 
 
 @archive_app.command("inspect")
@@ -384,6 +397,10 @@ def _render_archive_inspect(d: dict) -> None:
     print(f"file          : {d['file']}")
     print(f"schema_version: {d['schema_version']}  source_agent: {d['source_agent']}")
     print(f"export_time   : {d.get('export_time')}  source_project: {d.get('source_project')}")
+    if d.get("schema_version") == "2":
+        total_kb = int(d.get("total_bytes") or 0) / 1024
+        print(f"files: {d.get('file_count')} ({total_kb:.0f} KB)  "
+              f"missing_sessions: {d.get('missing_session_count')}")
     for k, v in (d.get("counts") or {}).items():
         print(f"  {k:<20} {v}")
 
@@ -419,15 +436,25 @@ def archive_import(
 
 def _render_archive_import(d: dict) -> None:
     state = "APPLIED" if d.get("applied") else "DRY-RUN"
-    print(f"[{state}] status={d.get('status')}  target={d.get('target')}")
+    src = f"  source: {d.get('source')}" if d.get("source") else ""
+    print(f"[{state}] status={d.get('status')}  target={d.get('target')}{src}")
     if "plan" in d:
         p = d["plan"]
-        print(f"plan: threads={p['threads']} sessions={p['sessions']} "
-              f"messages={p['messages']} parts={p['parts']}")
-        print(d.get("note", ""))
+        if "files" in p:
+            total_kb = p.get("total_bytes", 0) / 1024
+            print(f"plan: threads={p['threads']} sessions={p.get('sessions')} "
+                  f"files={p['files']} ({total_kb:.0f} KB) "
+                  f"missing_sessions={p.get('missing_sessions', 0)}")
+        else:
+            print(f"plan: threads={p['threads']} sessions={p['sessions']} "
+                  f"messages={p['messages']} parts={p['parts']}")
     if d.get("applied"):
         w = d.get("written") or {}
-        print(f"written: threads={w.get('threads')} sessions={w.get('sessions')}")
+        if "files" in w:
+            print(f"written: threads={w.get('threads')} (skipped={w.get('threads_skipped')}) "
+                  f"files={w.get('files')} (skipped={w.get('files_skipped')})")
+        else:
+            print(f"written: threads={w.get('threads')} sessions={w.get('sessions')}")
         print(f"verify: {d.get('verify')}")
         print(f"operation={d.get('operation_id')}")
         for b in d.get("backup_dirs") or []:

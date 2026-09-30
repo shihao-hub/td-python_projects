@@ -33,8 +33,38 @@ zedhub mcp    ← MCP 桥：stdio(MCP) ↔ HTTP daemon
 
 ## 数据源边界
 
-当前仅实现 **OpenCode** 数据源（Zed 作为独立索引源）。Pi agent、Claude Code、
-Codex、Antigravity 未实现——查询它们返回 `source_not_supported`，不伪造数据。
+结构化会话查询当前仅实现 **OpenCode** 数据源（Zed 作为独立索引源）。Pi agent
+未实现——查询返回 `source_not_supported`，不伪造数据。
+
+**claude-code / codex / antigravity** 三源已注册为 EXPORT-only 文件级源
+（`capabilities=[export]`）：不支持会话查询，仅参与 `archive export` 跨机
+迁移（见下）。
+
+## 归档迁移（archive export / import）
+
+- `archive export <project> -o a.db`（默认 opencode，**schema v1**）：
+  结构化 5 表（Zed threads + OpenCode session/message/part），行为不变；
+- `archive export <project> -o a.db --source claude-code|codex|antigravity`
+  （**schema v2**）：以 Zed threads 为锚（`sidebar_threads` 按 agent_id 索引），
+  agent 本地数据文件**整文件字节搬运**到 `agent_files` 表（不解析内容）：
+  - claude-code：`~/.claude/projects/<slug>/<sid>.jsonl`；
+  - codex：`~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<sid>.jsonl`；
+  - antigravity：`~/.gemini/antigravity-acp/conversations/<sid>.db`（旁带
+    `.meta` 一并搬运）；
+  - 本地已不存在的会话计入 `missing_session_count` 如实报告；
+- `archive import a.db --target <dir>`：v1/v2 自动按 `schema_version` 分派；
+  v2 apply 先写源数据文件（**目标文件已存在一律跳过**，不写坏在用文件），
+  再补登 Zed threads（新 thread_id、session_id 原样保留、folder_paths 指向
+  目标目录），重跑安全（幂等跳过）。
+
+已知边界：
+- antigravity 对话本体（`steps.step_payload`）是无公开 schema 的 protobuf，
+  归档为整库字节，归档内不可结构化查询内容；
+- 仅迁移 Zed 内使用过的会话（以 Zed threads 为锚），终端直跑的同 agent
+  会话不在范围内；
+- v2 import 不做源 agent 进程名检查（agent CLI 是 node 子进程，tasklist
+  名匹配不可靠），靠「已存在即跳过」的文件级安全策略保证不写坏在用文件；
+  Zed db 写入前的 zed/opencode 进程检查照常强制。
 
 ## 本地数据目录（强约束）
 
@@ -67,6 +97,8 @@ uv run zedhub sessions content ses_xxx --format markdown -o out.md
 uv run zedhub stats effort                   # 启动模型 × 档位统计（--watch）
 uv run zedhub sessions link <dir>            # 补登 dry-run（--apply 才写）
 uv run zedhub archive export <project> -o a.db
+uv run zedhub archive export <project> -o a.db --source claude-code  # v2（codex/antigravity 同）
+uv run zedhub archive import a.db --target <dir>                      # dry-run（--apply 才写）
 uv run zedhub schema                         # 离线契约导出（不连 daemon）
 ```
 
