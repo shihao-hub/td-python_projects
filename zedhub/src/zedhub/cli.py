@@ -434,6 +434,19 @@ def _render_archive_import(d: dict) -> None:
         print(d["note"])
 
 
+@app.command()
+def schema(
+    channel: Annotated[str, typer.Option("--channel", help="all | http | mcp | ws | rpc | cli")] = "all",
+) -> None:
+    """Export the static interface contract (fully local; no daemon, no db)."""
+    from .schema_export import render
+
+    try:
+        typer.echo(render(channel))
+    except ValueError as exc:
+        _die(str(exc), code=2)
+
+
 # -- programmatic protocols ----------------------------------------------------
 
 
