@@ -145,7 +145,12 @@ async def dispatch(request: Request) -> Response:
         params = _extract_params(request, endpoint, body)
         state.inflight += 1
         try:
-            data = await _run_in_pool(api.call, endpoint.api_method, params, state.ctx)
+            if endpoint.method == "POST":
+                # 写流水线全局互斥：daemon 内单一写者（读请求不受阻塞）
+                async with state.write_lock:
+                    data = await _run_in_pool(api.call, endpoint.api_method, params, state.ctx)
+            else:
+                data = await _run_in_pool(api.call, endpoint.api_method, params, state.ctx)
         finally:
             state.inflight -= 1
             state.last_activity = time.monotonic()  # 空闲计时重置（请求结束时刻）

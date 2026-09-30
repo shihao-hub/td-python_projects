@@ -232,6 +232,26 @@ def _stats_effort(params: dict, ctx: CallContext) -> Any:
     return out
 
 
+def _sessions_link(params: dict, ctx: CallContext) -> Any:
+    from .core.linking import run_link
+
+    project = _opt_str(params, "project")
+    if project is None:
+        raise InvalidParamsError("param 'project' is required")
+    target = params.get("target")
+    if target is not None and not isinstance(target, str):
+        raise InvalidParamsError("param 'target' must be a string")
+    return run_link(
+        project=project,
+        all_dirs=bool(params.get("all_dirs")),
+        target=target,
+        include_subagents=bool(params.get("include_subagents")),
+        apply=bool(params.get("apply")),
+        zed_db=ctx.zed_db,
+        opencode_db=ctx.opencode_db,
+    )
+
+
 # -- 注册表 -----------------------------------------------------------------------
 
 METHODS: dict[str, Callable[[dict, CallContext], Any]] = {
@@ -244,6 +264,7 @@ METHODS: dict[str, Callable[[dict, CallContext], Any]] = {
     "sessions.show": _sessions_show,
     "sessions.content": _sessions_content,
     "stats.effort": _stats_effort,
+    "sessions.link": _sessions_link,
 }
 
 

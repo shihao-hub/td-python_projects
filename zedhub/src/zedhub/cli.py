@@ -262,6 +262,53 @@ def stats_effort(
         raise typer.Exit() from None
 
 
+@sessions_app.command("link")
+def sessions_link(
+    project: Annotated[str, typer.Argument(help="Directory path or substring (case-insensitive).")],
+    all: Annotated[bool, typer.Option("--all", help="Handle every matched directory (sessions land on their own dir).")] = False,
+    target: Annotated[Optional[str], typer.Option("--target", help="Force all matched sessions onto this Zed workspace dir.")] = None,
+    include_subagents: Annotated[bool, typer.Option("--include-subagents", help="Also link subagent sessions (skipped by default).")] = False,
+    apply: Annotated[bool, typer.Option("--apply", help="Actually write (default: dry-run plan only).")] = False,
+    host: HOST_OPT = None,
+    json_out: JSON_OPT = False,
+) -> None:
+    """Backfill OpenCode sessions into the Zed index (dry-run by default)."""
+    def fn():
+        return DaemonClient(host).call(
+            "POST", f"{API_PREFIX}/sessions/link", timeout=600.0,
+            body={
+                "project": project, "all_dirs": all, "target": target,
+                "include_subagents": include_subagents, "apply": apply,
+            },
+        )
+
+    data, _ = _run_query(fn, as_json=json_out)
+    if json_out:
+        _emit_new(data, as_json=True)
+        return
+    _render_link_result(data)
+
+
+def _render_link_result(d: dict) -> None:
+    state = "APPLIED" if d.get("applied") else "DRY-RUN"
+    print(f"[{state}] query={d.get('query')!r}  status={d.get('status')}")
+    print(f"matched={d.get('matched')}  planned={d.get('planned')}  "
+          f"already_linked={d.get('already_linked')}  skipped_subagents={d.get('skipped_subagents')}")
+    for directory, n in (d.get("directories") or {}).items():
+        print(f"  [{n:>3}] {directory}")
+    for p in d.get("preview") or []:
+        print(f"    + {p['session_id']}  [{p['title']}]  -> {p['directory']}")
+    if d.get("note"):
+        print(f"note: {d['note']}")
+    if d.get("applied"):
+        print(f"written={d.get('written')}  verify={d.get('verify')}  "
+              f"operation={d.get('operation_id')}")
+        for b in d.get("backup_dirs") or []:
+            print(f"backup: {b}")
+    else:
+        print("dry-run 完成；关闭 Zed 与 opencode 后加 --apply 执行实际补登")
+
+
 # -- programmatic protocols ----------------------------------------------------
 
 
