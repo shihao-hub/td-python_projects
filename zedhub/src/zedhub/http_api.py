@@ -209,8 +209,12 @@ def run_server(
     opencode_db: Path | None = None,
     on_start=None,
     on_shutdown=None,
+    ws_port: int | None = 8765,
 ) -> None:
-    """前台运行 daemon（uvicorn 承载）；lifecycle（任务 7）挂 on_* 钩子。"""
+    """前台运行 daemon（uvicorn 承载 + WS 学习通道并行）。
+
+    lifecycle（任务 7）挂 on_* 钩子；ws_port=0 关闭 WS 通道。
+    """
     import contextlib
 
     import uvicorn
@@ -223,6 +227,12 @@ def run_server(
             max_workers=SERVICE_POOL_SIZE, thread_name_prefix="zedhub-svc"
         )
         loop.set_default_executor(pool)  # 有界线程池：同步 Service 调用的并发界
+        ws_server = None
+        if ws_port:
+            from .ws import WsChannel
+
+            channel = WsChannel(app.state.daemon)
+            ws_server = await channel.start(port=ws_port)
         if on_start is not None:
             r = on_start(server, app)  # 钩子拿到 server 引用（空闲退出触发用）
             if asyncio.iscoroutine(r):
@@ -230,6 +240,9 @@ def run_server(
         try:
             yield
         finally:
+            if ws_server is not None:
+                ws_server.close()
+                await ws_server.wait_closed()
             if on_shutdown is not None:
                 r = on_shutdown()
                 if asyncio.iscoroutine(r):

@@ -133,6 +133,7 @@ def main(
 def serve(
     host: Annotated[str, typer.Option("--host", help="Loopback bind address (127.0.0.1/localhost/::1).")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="HTTP API port.")] = 8766,
+    ws_port: Annotated[int, typer.Option("--ws-port", help="WebSocket channel port (0 disables). Frozen learning channel; use HTTP for automation.")] = 8765,
     db: Annotated[Optional[Path], typer.Option("--db", help="Zed db.sqlite (or its dir). Defaults to Zed's live location.")] = None,
     opencode_db: Annotated[Optional[Path], typer.Option("--opencode-db", help="opencode.db path. Defaults to auto-detect.")] = None,
     auto_spawned: Annotated[bool, typer.Option("--auto-spawned", help="(internal) mark daemon as auto-spawned.", hidden=True)] = False,
@@ -150,7 +151,7 @@ def serve(
     try:
         serve_with_lifecycle(
             host=host, port=port, zed_db=db, opencode_db=opencode_db,
-            auto_spawned=auto_spawned,
+            auto_spawned=auto_spawned, ws_port=ws_port,
         )
     except Exception as exc:
         typer.secho(f"zedhub: {exc}", fg=typer.colors.RED, err=True)

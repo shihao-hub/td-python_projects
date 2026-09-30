@@ -124,6 +124,7 @@ def serve_with_lifecycle(
     opencode_db: Path | None = None,
     auto_spawned: bool = False,
     idle_timeout_s: float = IDLE_TIMEOUT_DEFAULT_S,
+    ws_port: int | None = 8765,
 ) -> None:
     """带生命周期管理的 daemon 启动（serve 命令的实际实现）。"""
     existing = probe(host, port)
@@ -167,6 +168,7 @@ def serve_with_lifecycle(
             opencode_db=opencode_db,
             on_start=on_start,
             on_shutdown=on_shutdown,
+            ws_port=ws_port,
         )
     except Exception:
         traceback.print_exc()
