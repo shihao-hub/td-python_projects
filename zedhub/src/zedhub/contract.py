@@ -43,6 +43,7 @@ class LinkBody(BaseModel):
     """POST /api/v1/sessions/link 请求体（sessions link 命令面）。"""
 
     project: str                      # 目录路径或子串
+    source: str = "opencode"          # opencode | claude-code | codex | antigravity
     all_dirs: bool = False            # 命中多目录时逐目录处理
     target: str | None = None         # 强制统一目标工作区
     include_subagents: bool = False
@@ -132,7 +133,9 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
     ),
     HttpEndpoint(
         method="POST", path=f"{API_PREFIX}/sessions/link", api_method="sessions.link",
-        summary="Backfill OpenCode sessions into Zed index (dry-run by default; apply=true writes).",
+        summary="Backfill sessions into Zed index (source: opencode | claude-code | codex |"
+                " antigravity; dry-run by default; apply=true writes). Non-opencode sources"
+                " allow cross-directory mounting (same session_id, new thread per target dir).",
         body_model=LinkBody, sse=True,
     ),
     HttpEndpoint(

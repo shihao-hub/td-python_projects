@@ -37,9 +37,9 @@ zedhub mcp    ← MCP 桥：stdio(MCP) ↔ HTTP daemon
 结构化会话查询当前仅实现 **OpenCode** 数据源（Zed 作为独立索引源）。Pi agent
 未实现——查询返回 `source_not_supported`，不伪造数据。
 
-**claude-code / codex / antigravity** 三源已注册为 EXPORT-only 文件级源
-（`capabilities=[export]`）：不支持会话查询，仅参与 `archive export` 跨机
-迁移（见下）。
+**claude-code / codex / antigravity** 三源已注册为文件级源
+（`capabilities=[export, link]`）：不支持会话查询，参与 `archive export`
+跨机迁移（见下）与 `sessions link` 补登（见下）。
 
 ## 归档迁移（archive export / import）
 
@@ -82,6 +82,35 @@ zedhub mcp    ← MCP 桥：stdio(MCP) ↔ HTTP daemon
 - 分库短事务 + `PRAGMA wal_checkpoint(TRUNCATE)` + 只读复查；
 - **跨库不伪造原子性**：Zed 失败时 OpenCode 已提交的部分保留 operation
   journal（`partial`/`unknown` 状态）、ID 映射与备份，绝不虚报成功。
+
+## 会话补登（sessions link）
+
+把会话补登进 Zed 索引（`sidebar_threads` 新行：新 thread_id、沿用原
+session_id，正文不断链），默认 dry-run：
+
+- `sessions link <dir>`（默认 **opencode**）：查 OpenCode session 表；
+  查重为**全局 session_id**（存量语义：任何目录已有该会话入口即跳过）；
+- `sessions link <dir> --source claude-code|codex|antigravity`：浅层扫描
+  各源用户级数据根（只读会话文件头部与尾部残段，不解析正文）：
+  - claude-code：`~/.claude/projects/*/<sid>.jsonl`（行内 `cwd` 锚定目录，
+    首条真人 user 消息作标题，行内时间戳）；
+  - codex：`~/.codex/sessions/**`（首行 `session_meta` 的 cwd/时间）；
+  - antigravity：`~/.gemini/antigravity-acp/conversations/<sid>.meta` 的
+    `cwd`；对话本体是 protobuf，标题留空，时间用 `.db` 文件 mtime；
+  - 无法定位目录的会话（如 antigravity 无 `.meta`）计入 `no_directory`
+    跳过，不猜测；
+- **跨目录挂载**（仅三源）：查重按 `(agent_id, session_id, 目标目录)` 三元组，
+  同一会话可在另一个工作区目录再挂一份入口（原目录入口保留，两个工作区
+  都能打开同一会话）：
+
+```powershell
+uv run zedhub sessions link language_projects --source antigravity            # dry-run
+uv run zedhub sessions link .thirdparty --source antigravity --target <nanocode>  # 挂到另一工作区（--apply 才写）
+```
+
+- 已知边界：三源补登的 thread 一律 `archived=0`；环境注入块
+  （`<environment_context>`、`# AGENTS.md instructions` 等）不作标题；
+  opencode 的全局查重语义保持不变（跨目录挂载仅三源）。
 
 ## WebSocket 冻结声明
 
@@ -134,6 +163,7 @@ uv run zedhub search zedhub --archived all   # 元数据检索（CLI 壳）
 uv run zedhub ui                             # 打开 Web 检索页
 uv run zedhub stats effort                   # 启动模型 × 档位统计（--watch）
 uv run zedhub sessions link <dir>            # 补登 dry-run（--apply 才写）
+uv run zedhub sessions link <dir> --source antigravity   # 三源补登/跨目录挂载
 uv run zedhub archive export <project> -o a.db
 uv run zedhub archive export <project> -o a.db --source claude-code  # v2（codex/antigravity 同）
 uv run zedhub archive import a.db --target <dir>                      # dry-run（--apply 才写）

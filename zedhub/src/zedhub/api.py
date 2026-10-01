@@ -315,6 +315,7 @@ def _sessions_link(params: dict, ctx: CallContext, progress=noop_progress) -> An
         raise InvalidParamsError("param 'target' must be a string")
     return run_link(
         project=project,
+        source=_opt_str(params, "source") or "opencode",
         all_dirs=bool(params.get("all_dirs")),
         target=target,
         include_subagents=bool(params.get("include_subagents")),

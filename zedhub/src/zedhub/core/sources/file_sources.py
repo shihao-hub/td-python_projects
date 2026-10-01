@@ -1,9 +1,10 @@
-"""文件级 agent 源（claude-code/codex/antigravity）：仅注册 archive EXPORT。
+"""文件级 agent 源（claude-code/codex/antigravity）：archive EXPORT + sessions LINK。
 
 - 三源不做结构化会话解析（codex/claude JSONL 不投影、antigravity
   step_payload 是无公开 schema 的 protobuf），会话查询方法一律
   ``source_not_supported``，不伪造为空结果（AC-13）；
 - 归档迁移走 ``archive export/import``（schema v2 整文件字节搬运）；
+  补登走 ``sessions link --source <id>``（浅层元数据扫描，见 agent_sessions）；
 - availability 按各源用户级数据根（~/.claude | ~/.codex | ~/.gemini）存在性。
 """
 
@@ -24,11 +25,14 @@ FILE_SOURCE_DISPLAY_NAMES: dict[str, str] = {
     "antigravity": "Antigravity (Zed ACP)",
 }
 
-_EXPORT_ONLY_NOTE = "仅支持 archive export（schema v2 整文件迁移）；不支持会话查询"
+_EXPORT_LINK_NOTE = (
+    "支持 archive export/import（schema v2 整文件迁移）与 sessions link 补登"
+    "（含跨目录挂载）；不支持会话查询"
+)
 
 
 class FileSource(AgentSource):
-    """EXPORT-only 适配器：list/get/content 一律拒绝，不伪造数据。"""
+    """EXPORT/LINK 适配器：list/get/content 一律拒绝，不伪造数据。"""
 
     def __init__(self, source_id: str) -> None:
         self.source_id = source_id
@@ -47,13 +51,13 @@ class FileSource(AgentSource):
             availability=(
                 Availability.SUPPORTED if available else Availability.UNAVAILABLE
             ),
-            capabilities=[Capability.EXPORT],
+            capabilities=[Capability.EXPORT, Capability.LINK],
             note=note,
         )
 
     def _reject(self) -> NoReturn:
         raise SourceNotSupportedError(
-            f"数据源 {self.source_id!r} {_EXPORT_ONLY_NOTE}"
+            f"数据源 {self.source_id!r} {_EXPORT_LINK_NOTE}"
         )
 
     def list_sessions(self, request: SessionListRequest, *, db: Path | None = None) -> list[Session]:

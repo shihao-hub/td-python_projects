@@ -274,6 +274,7 @@ def _render_stage(stage: dict, *, refresh: bool = True) -> None:
 @sessions_app.command("link")
 def sessions_link(
     project: Annotated[str, typer.Argument(help="Directory path or substring (case-insensitive).")],
+    source: Annotated[str, typer.Option("--source", help="Session source: opencode (default) | claude-code | codex | antigravity. Non-opencode sources dedupe per (agent, session, target dir), so cross-directory mounting is allowed.")] = "opencode",
     all: Annotated[bool, typer.Option("--all", help="Handle every matched directory (sessions land on their own dir).")] = False,
     target: Annotated[Optional[str], typer.Option("--target", help="Force all matched sessions onto this Zed workspace dir.")] = None,
     include_subagents: Annotated[bool, typer.Option("--include-subagents", help="Also link subagent sessions (skipped by default).")] = False,
@@ -281,10 +282,10 @@ def sessions_link(
     host: HOST_OPT = None,
     json_out: JSON_OPT = False,
 ) -> None:
-    """Backfill OpenCode sessions into the Zed index (dry-run by default)."""
+    """Backfill agent sessions into the Zed index (dry-run by default)."""
     def fn():
         body = {
-            "project": project, "all_dirs": all, "target": target,
+            "project": project, "source": source, "all_dirs": all, "target": target,
             "include_subagents": include_subagents, "apply": apply,
         }
         if apply:
@@ -306,9 +307,12 @@ def sessions_link(
 
 def _render_link_result(d: dict) -> None:
     state = "APPLIED" if d.get("applied") else "DRY-RUN"
-    print(f"[{state}] query={d.get('query')!r}  status={d.get('status')}")
+    source = d.get("source") or "opencode"
+    print(f"[{state}] query={d.get('query')!r}  source={source}  status={d.get('status')}")
     print(f"matched={d.get('matched')}  planned={d.get('planned')}  "
           f"already_linked={d.get('already_linked')}  skipped_subagents={d.get('skipped_subagents')}")
+    if d.get("no_directory"):
+        print(f"no_directory={d.get('no_directory')}（无法定位目录，已跳过）")
     for directory, n in (d.get("directories") or {}).items():
         print(f"  [{n:>3}] {directory}")
     for p in d.get("preview") or []:
