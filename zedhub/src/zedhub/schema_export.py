@@ -133,6 +133,8 @@ def _cli_channel() -> dict:
             "stats": "Zed 总览（兼容基线）",
             "stats effort": "OpenCode 启动模型×档位统计（--watch/-i）",
             "sessions list/show/content": "agent 会话查询（--source/--project/--format/--out）",
+            "search": "会话元数据检索（q/--agent/--project/--archived/--since/--until/--limit/--include-unlinked）",
+            "ui": "打开 daemon 托管的本地检索页（--print 只打印 URL）",
             "sessions link": "补登（--all/--target/--include-subagents/--apply）",
             "archive export/inspect/import": "归档导出/检查/导入（-o/--source/--target/--apply）",
             "rpc": "JSON-RPC 兼容薄壳（stdin/stdout）",

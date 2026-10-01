@@ -589,3 +589,60 @@ def sessions_content(
             render_content_text(data)
     else:
         _die(f"invalid --format: {fmt} (use text | markdown)", code=2)
+
+
+# -- search（会话元数据检索；正文全文检索见计划二期） ---------------------------
+
+
+@app.command()
+def search(
+    query: Annotated[Optional[str], typer.Argument(help="Keywords, whitespace-separated (all must match).")] = None,
+    agent: Annotated[Optional[str], typer.Option("--agent", help="Exact agent id, e.g. opencode, claude-acp.")] = None,
+    project: Annotated[Optional[str], typer.Option("--project", help="Substring match on project path.")] = None,
+    archived: Annotated[str, typer.Option("--archived", help="no=active only (default), only=archived, all.")] = "no",
+    since: Annotated[Optional[str], typer.Option("--since", help="YYYY-MM-DD or ISO datetime (local time).")] = None,
+    until: Annotated[Optional[str], typer.Option("--until", help="YYYY-MM-DD or ISO datetime (local time).")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=0, help="Cap results; 0 means no cap (default 50).")] = 50,
+    include_unlinked: Annotated[bool, typer.Option("--include-unlinked", help="Also list OpenCode sessions missing from the Zed index.")] = False,
+    host: HOST_OPT = None,
+    json_out: JSON_OPT = False,
+) -> None:
+    """Search session metadata (title/agent/id/project).
+
+    Zed index is the primary table (every session visible in Zed); OpenCode
+    sessions are joined by session id. Full-text search over message content is
+    not implemented yet (planned phase 2).
+    """
+    from .serialization import render_search_result
+
+    def fn():
+        return DaemonClient(host).call(
+            "GET", f"{API_PREFIX}/search",
+            query={"q": query, "agent": agent, "project": project, "archived": archived,
+                   "since": since, "until": until, "limit": limit,
+                   "include_unlinked": "true" if include_unlinked else None},
+        )
+
+    data, _ = _run_query(fn, as_json=json_out)
+    _emit_new(data, as_json=json_out, renderer=render_search_result)
+
+
+# -- ui（打开 daemon 托管的检索页；地址解析不触发业务） -------------------------
+
+
+@app.command()
+def ui(
+    host: HOST_OPT = None,
+    print_only: Annotated[bool, typer.Option("--print", help="Only print the URL; do not open a browser.")] = False,
+) -> None:
+    """Open the local session search page (served by the daemon)."""
+    import webbrowser
+
+    resolved_host, port = DaemonClient(host).ensure_connected()
+    scheme_host = f"[{resolved_host}]" if ":" in resolved_host else resolved_host
+    url = f"http://{scheme_host}:{port}/ui"
+    print(url)
+    if print_only:
+        return
+    if not webbrowser.open(url):  # 无可用浏览器时不报错，URL 已打印可手粘
+        typer.secho("zedhub: 未能自动打开浏览器，请手动访问上面的地址", fg=typer.colors.YELLOW, err=True)

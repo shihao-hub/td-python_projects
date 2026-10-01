@@ -8,13 +8,14 @@ Zed + OpenCode agent 会话统一工具：会话检索、完整内容查看、�
 ```
 zedhub serve  ← 唯一业务进程（daemon）：HTTP+JSON API @ 127.0.0.1:8766（唯一契约）
 zedhub <cmd>  ← CLI 薄客户端：参数解析 → HTTP → 渲染
+zedhub ui     ← 打开 daemon 托管的 Web 检索页 @ /ui（同样是薄客户端）
 zedhub rpc    ← 兼容 JSON-RPC 薄壳（方法表冻结；rpc.discover 本地响应）
 zedhub mcp    ← MCP 桥：stdio(MCP) ↔ HTTP daemon
 （WebSocket 学习通道并存于 daemon 进程 @ 127.0.0.1:8765，见下文冻结声明）
 ```
 
 - Service 层（数据库访问、业务逻辑、写编排）**只存在于 daemon**；壳内只有
-  API client 与渲染（CLI/rpc/MCP 壳不 import `zedhub.core` 业务层）。
+  API client 与渲染（CLI/rpc/MCP/Web 壳不 import `zedhub.core` 业务层）。
 - 纯本地命令（`--help`、`--version`、`schema`、补全脚本）不触发 daemon、
   不访问数据库。
 - **daemon 生命周期**：
@@ -88,12 +89,49 @@ daemon 同时监听 `127.0.0.1:8765` 的 WebSocket 通道（仅 `threads.list` �
 `stats` 两个只读方法）。该通道是**一次性学习实现**：本轮实现后冻结，不再
 新增任何方法或能力；生产与自动化用途一律使用 HTTP API。
 
+## 会话检索（search + Web 检索页）
+
+一期**只检索元数据**（标题 / agent / 会话与线程 id / 项目路径 / 时间 / 归档状态）；
+会话正文的全文检索是二期（语料与索引方案见
+`docs/plans/29-zedhub-session-search.md` 的「二期」与「遗留待办」）。
+
+- 语义（服务端唯一定义）：`q` 按空白切分为多关键词，**全部命中**（AND）；
+  每个关键词在标题/agent/线程 id/会话 id/项目路径任一字段做不区分大小写子串匹配；
+  `q` 为空即按过滤条件浏览；
+- **Zed 索引是主表**：它代表「Zed 里看得见的会话」（opencode/claude-acp/codex-acp/
+  antigravity-acp/pi-acp 等），OpenCode 会话按 `session_id` 关联补目录与模型；
+  `--include-unlinked` 才额外列出未进 Zed 索引的 OpenCode 会话（默认隐藏，避免重复）；
+- 降级口径：Zed 库缺失照常报错；**OpenCode 库不可用不报错**，结果只含 Zed 侧并在
+  载荷 `degraded` 与页面横幅中说明（与 `stats effort` 同一口径）；
+- 三个壳同源：CLI `zedhub search`、MCP `zedhub.search.sessions`、Web 页 `/ui`。
+
+```powershell
+uv run zedhub search zedhub                       # 关键词检索
+uv run zedhub search "zedhub 搜索" --archived all  # 多关键词 AND + 含归档
+uv run zedhub search --agent opencode --since 2026-09-01 --json
+uv run zedhub ui                                  # 打开 Web 检索页（--print 只打印 URL）
+```
+
+## Web 检索页（`/ui`）
+
+- 地址：`http://127.0.0.1:8766/ui`（端口随 daemon；`zedhub ui` 会按地址发现打开正确地址）；
+- 形态：搜索框（`/` 聚焦、`Esc` 清空、输入防抖）+ 过滤行（agent/项目/归档三态/起止日期/
+  含未关联会话）+ 结果列表（标题命中高亮、agent 与来源徽章、项目路径）+ 详情面板
+  （点开看所属会话；OpenCode 会话可点「加载正文」按需取前 50 条消息）；
+  检索条件同步到 URL，刷新与分享都保持；
+- 边界：静态资源随包分发（原生 HTML/CSS/JS，**零构建链、零新增进程**），由 daemon
+  在 `/ui` 托管；与 API 同一安全防线（`Host` 必须回环，否则 403），响应 `no-store`；
+- 页面只调 `/api/v1`（`/search`、`/stats`、`/projects`、`/threads/{id}`、
+  `/sessions/{id}`、`/sessions/{id}/content`），不含任何业务逻辑。
+
 ## 常用命令
 
 ```powershell
 uv run zedhub serve                          # 前台启动 daemon
 uv run zedhub sessions list --project xxx    # 会话列表（zed_linked 标记）
 uv run zedhub sessions content ses_xxx --format markdown -o out.md
+uv run zedhub search zedhub --archived all   # 元数据检索（CLI 壳）
+uv run zedhub ui                             # 打开 Web 检索页
 uv run zedhub stats effort                   # 启动模型 × 档位统计（--watch）
 uv run zedhub sessions link <dir>            # 补登 dry-run（--apply 才写）
 uv run zedhub archive export <project> -o a.db

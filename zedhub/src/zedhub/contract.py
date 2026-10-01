@@ -120,6 +120,13 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
         path_params=("session_id",),
     ),
     HttpEndpoint(
+        method="GET", path=f"{API_PREFIX}/search", api_method="search.sessions",
+        summary="Search session metadata (title/agent/id/project) across the Zed index"
+                " and OpenCode sessions; opencode content full-text search is not implemented yet.",
+        query_params=("q", "agent", "project", "archived", "since", "until", "limit",
+                      "include_unlinked"),
+    ),
+    HttpEndpoint(
         method="GET", path=f"{API_PREFIX}/stats/effort", api_method="stats.effort",
         summary="Startup model × effort report (degraded flags in payload, not errors).",
     ),
@@ -165,6 +172,7 @@ def find_endpoint(method: str, path: str) -> HttpEndpoint | None:
 # 让 GET 与 POST body / RPC params 的类型校验口径一致）。参数名全局唯一。
 QUERY_PARAM_TYPES: dict[str, str] = {
     "limit": "integer",
+    "include_unlinked": "boolean",
 }
 
 
@@ -235,6 +243,22 @@ MCP_TOOLS: tuple[ToolMeta, ...] = (
         name="zedhub.sessions.content", api_method="sessions.content",
         summary="Full session content: session meta + messages + parts.",
         params=(ParamDoc("session_id", "Session id (see sessions.list).", required=True),),
+    ),
+    ToolMeta(
+        name="zedhub.search.sessions", api_method="search.sessions", result_type="object",
+        summary="Search session metadata (title/agent/id/project) across the Zed index and"
+                " OpenCode sessions (content full-text search not implemented yet).",
+        params=(
+            ParamDoc("q", "Keywords, whitespace-separated; every keyword must match."),
+            ParamDoc("agent", "Exact agent id, e.g. 'opencode', 'claude-acp'."),
+            ParamDoc("project", "Substring match on project path (case-insensitive)."),
+            ParamDoc("archived", "'no' = active only (default), 'only' = archived, 'all'."),
+            ParamDoc("since", "YYYY-MM-DD or ISO datetime (local time)."),
+            ParamDoc("until", "YYYY-MM-DD or ISO datetime (local time)."),
+            ParamDoc("limit", "Cap results; '0' means no cap (default 50)."),
+            ParamDoc("include_unlinked",
+                     "'true' also lists OpenCode sessions missing from the Zed index."),
+        ),
     ),
     ToolMeta(
         name="zedhub.stats.effort", api_method="stats.effort",

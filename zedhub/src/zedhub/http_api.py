@@ -141,13 +141,24 @@ def _extract_params(request: Request, endpoint: HttpEndpoint, body: dict) -> dic
             # query string 天然 str：按契约类型 coerce，与 body/RPC 口径一致
             from .contract import QUERY_PARAM_TYPES
 
-            if QUERY_PARAM_TYPES.get(key) == "integer":
+            declared = QUERY_PARAM_TYPES.get(key)
+            if declared == "integer":
                 try:
                     value = int(value)
                 except ValueError:
                     raise InvalidParamsError(
                         f"param '{key}' must be an integer, got {value!r}"
                     ) from None
+            elif declared == "boolean":
+                text = value.strip().lower()
+                if text in ("1", "true", "yes", "on"):
+                    value = True
+                elif text in ("0", "false", "no", "off", ""):
+                    value = False
+                else:
+                    raise InvalidParamsError(
+                        f"param '{key}' must be a boolean, got {value!r}"
+                    )
             params.setdefault(key, value)
         for pp in endpoint.path_params:
             if pp in request.path_params:
@@ -249,11 +260,14 @@ def build_app(
     extra_routes: list[Route] | None = None,
     lifespan=None,
 ) -> Starlette:
-    """组装 daemon HTTP 应用；WS（任务 11）经 extra_routes 注入。"""
+    """组装 daemon HTTP 应用；WS（任务 11）与 Web UI 静态资源经路由注入。"""
+    from .webui import static_routes
+
     routes = [
         Route(ep.path, dispatch, methods=[ep.method])
         for ep in HTTP_ENDPOINTS
     ]
+    routes.extend(static_routes())  # /ui 检索页与静态资源（同为回环 Host 防线）
     if extra_routes:
         routes.extend(extra_routes)
     kwargs: dict = {"routes": routes, "exception_handlers": {404: _not_found, 405: _not_found}}

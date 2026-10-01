@@ -104,6 +104,54 @@ def _human_size(n: int) -> str:
     return f"{n / div:.1f}{'KMGTPE'[exp]}B"
 
 
+def render_search_result(result: dict) -> None:
+    """检索结果人读版式：每条命中两行（主行 + 项目/id 上下文行）。"""
+    query = result.get("query") or {}
+    criteria = [f"archived={query.get('archived')}"]
+    if query.get("q"):
+        criteria.insert(0, f"q={query['q']!r}")
+    if query.get("agent"):
+        criteria.append(f"agent={query['agent']}")
+    if query.get("project"):
+        criteria.append(f"project={query['project']!r}")
+    if query.get("since"):
+        criteria.append(f"since={str(query['since'])[:10]}")
+    if query.get("until"):
+        criteria.append(f"until={str(query['until'])[:10]}")
+    if query.get("include_unlinked"):
+        criteria.append("include_unlinked=true")
+    print("search: " + "  ".join(criteria))
+
+    for note in result.get("degraded") or []:
+        print(f"! {note}")
+
+    hits = result.get("hits") or []
+    if not hits:
+        print("(no matches)")
+        return
+
+    w_kind, w_agent, w_match = 12, 14, 16
+    print(f"{'KIND':<{w_kind}}  {'AGENT':<{w_agent}}  {'A':<1}  {'MATCH':<{w_match}}  {'UPDATED':<16}  TITLE")
+    for h in hits:
+        title = (h.get("title") or "(untitled)")[:48]
+        print(
+            f"{h['kind'][:w_kind]:<{w_kind}}  {(h.get('agent_id') or '-')[:w_agent]:<{w_agent}}"
+            f"  {'*' if h.get('archived') else '':<1}  {','.join(h.get('matched_fields') or [])[:w_match]:<{w_match}}"
+            f"  {fmt_dt(h.get('updated_at') or h.get('created_at')):<16}  {title}"
+        )
+        context = [", ".join(Path(p).name for p in h.get("projects") or []) or "-"]
+        ids = "  ".join(x for x in (h.get("session_id"), h.get("thread_id")) if x)
+        if ids:
+            context.append(ids)
+        print(f"{'':<{w_kind}}  {'':<{w_agent}}       {'':<{w_match}}  {'':<16}  └ {' · '.join(context)}")
+
+    total, count = result.get("total", len(hits)), result.get("count", len(hits))
+    if total > count:
+        print(f"\n{count}/{total} hit(s)（已截断；--limit 0 查看全部）")
+    else:
+        print(f"\n{count} hit(s)")
+
+
 def render_effort_report(rep: dict) -> None:
     """stats effort 人读版式（对齐 ocstat render.go）。"""
     is_full = rep.get("mode") == "full"

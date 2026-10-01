@@ -22,11 +22,14 @@ from .core.errors import (
     MethodNotSupportedError,
     SchemaError,
     SnapshotError,
+    ZedhubError,
 )
 from .core.model import Overview, ProjectStat, Session, SessionContent, Thread
+from .core.model import SearchRequest, SearchResult
+from .core.opencode_repo import OpencodeDb
 from .core.repo import ZedDb
 from .core.service import ThreadService
-from .core.snapshot import open_snapshot
+from .core.snapshot import open_opencode_ro, open_snapshot
 from .core.sources import get_source, list_source_infos
 from .core.model import SessionListRequest
 
@@ -109,6 +112,22 @@ def _opt_date(params: dict, key: str) -> datetime | None:
         except ValueError:
             continue
     raise InvalidParamsError(f"param '{key}' is not a valid date/ISO datetime: {raw}")
+
+
+def _opt_bool(params: dict, key: str, default: bool = False) -> bool:
+    """布尔参数：body 直传 bool；query string 传 "true"/"1"/"yes" 等。"""
+    value = params.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("1", "true", "yes", "on"):
+            return True
+        if text in ("0", "false", "no", "off", ""):
+            return False
+    raise InvalidParamsError(f"param '{key}' must be a boolean, got {value!r}")
 
 
 def _archived(params: dict) -> str:
@@ -234,6 +253,57 @@ def _stats_effort(params: dict, ctx: CallContext, progress=noop_progress) -> Any
     return out
 
 
+# -- 会话元数据检索 ---------------------------------------------------------------
+
+# API 默认返回条数（limit=0 表示不限制，由调用方显式指定）
+SEARCH_DEFAULT_LIMIT = 50
+
+
+def dump_search(result: SearchResult) -> dict:
+    out = result.model_dump(mode="json")
+    out["hits"] = [
+        _local(h, ("created_at", "updated_at", "interacted_at")) for h in result.hits
+    ]
+    return out
+
+
+def _search(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
+    """元数据检索：Zed 索引为主表；OpenCode 源不可用时降级而非失败。"""
+    from .core.search import SearchService
+
+    limit = _opt_int(params, "limit")
+    request = SearchRequest(
+        q=_opt_str(params, "q"),
+        agent=_opt_str(params, "agent"),
+        project=_opt_str(params, "project"),
+        archived=_archived(params),
+        since=_opt_date(params, "since"),
+        until=_opt_date(params, "until"),
+        limit=SEARCH_DEFAULT_LIMIT if limit is None else limit,
+        include_unlinked=_opt_bool(params, "include_unlinked"),
+    )
+
+    with open_snapshot(ctx.zed_db) as snap:
+        with ZedDb(snap) as db:
+            threads = db.load_threads()
+
+    sessions: list[Session] | None = None
+    degraded: list[str] = []
+    try:
+        with open_opencode_ro(ctx.opencode_db) as opened:
+            oc = OpencodeDb(
+                opened.con, db_path=opened.db_path, using_snapshot=opened.using_snapshot
+            )
+            # 归档过滤在检索层统一裁决，这里取全量会话（session 表为百行量级）
+            sessions = oc.list_sessions(archived="all")
+    except ZedhubError as exc:
+        degraded.append(f"OpenCode 数据源不可用，结果仅含 Zed 索引：{exc}")
+
+    result = SearchService(threads=threads, sessions=sessions).search(request)
+    result.degraded = degraded
+    return dump_search(result)
+
+
 def _sessions_link(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     from .core.linking import run_link
 
@@ -306,6 +376,7 @@ METHODS: dict[str, Callable[..., Any]] = {
     "sessions.list": _sessions_list,
     "sessions.show": _sessions_show,
     "sessions.content": _sessions_content,
+    "search.sessions": _search,
     "stats.effort": _stats_effort,
     "sessions.link": _sessions_link,
     "archive.export": _archive_export,

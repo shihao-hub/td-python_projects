@@ -105,6 +105,50 @@ class SessionListRequest(BaseModel):
     limit: int | None = None
 
 
+# -- 会话元数据检索（一期：只搜元数据，不做正文全文索引） ---------------------
+
+
+class SearchRequest(BaseModel):
+    """检索请求（服务端唯一定义语义；GUI/CLI 只做参数传递）。"""
+
+    q: str | None = None          # 空白分隔的多关键词，全部命中才算命中（AND）
+    agent: str | None = None      # agent id 精确匹配
+    project: str | None = None    # 项目路径子串匹配（不区分大小写）
+    archived: str = "no"          # "no" | "only" | "all"
+    since: datetime | None = None
+    until: datetime | None = None
+    limit: int | None = None      # 0 = 不限制；None = 调用方默认
+    include_unlinked: bool = False  # 是否补上未进 Zed 索引的 OpenCode 会话
+
+
+class SearchHit(BaseModel):
+    """统一检索结果条目：Zed 索引线程与 OpenCode 会话同形投影。"""
+
+    kind: str                     # "zed_thread" | "opencode_session"
+    title: str
+    agent_id: str
+    thread_id: str | None = None  # Zed 索引 thread uuid
+    session_id: str | None = None  # agent 侧会话 id
+    projects: list[str] = []
+    model: ModelRef | None = None  # OpenCode 侧可关联到时的模型信息
+    archived: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    interacted_at: datetime | None = None
+    matched_fields: list[str] = []  # title/agent/id/project（GUI 高亮用）
+    zed_linked: bool = False        # 是否存在于 Zed 索引
+
+
+class SearchResult(BaseModel):
+    """检索结果信封：命中总数 + 分页后的条目 + 降级说明。"""
+
+    query: SearchRequest
+    total: int                    # 过滤后命中总数（不受 limit 截断）
+    count: int                    # 本次返回条数
+    degraded: list[str] = []      # 数据源降级说明（空 = 全部可用）
+    hits: list[SearchHit] = []
+
+
 def ms_to_dt(ms: int | None) -> datetime | None:
     """OpenCode 毫秒时间戳 → UTC aware datetime。"""
     if ms is None:
