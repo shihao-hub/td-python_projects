@@ -5,9 +5,11 @@
 """抖音视频下载器（CDP 版，uv 单脚本）。
 
 用法：
-    uv run douyin_dl.py "<含抖音链接的文本>" [--json] [--output-dir DIR]
+    uv run douyin_dl.py "<含抖音链接的文本>" [--json] [--output-dir DIR] [--headed]
     Get-Content 文案.txt -Raw | uv run douyin_dl.py --json
     uv run douyin_dl.py schema          # 导出 CLI 契约 JSON（零业务 I/O）
+
+默认无头后台运行 Chrome（不弹窗）；传 --headed 切换有头窗口（人工完成验证用）。
 
 分层（单文件内，遵循《CLI 工具开发标准》的 Service 核心 + 薄壳原则）：
     - 契约层：错误码、JSON 包络、schema 定义（不导入任何业务依赖）
@@ -34,7 +36,7 @@ from typing import Any, Callable, Iterable
 
 import websocket
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 PROG = "douyin_dl"
 # 项目目录名（monorepo 目录名）用下划线，与 CLI 程序名 PROG 区分
 PROJECT_DIR_NAME = "douyin_downloader"
@@ -186,6 +188,7 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                         "debug_port": {"type": "integer", "default": resolved["debug_port"], "description": "Chrome CDP 端口"},
                         "profile_dir": {"type": "string", "default": "", "description": "Chrome 专用 Profile 目录，空表示使用默认数据目录"},
                         "chrome": {"type": "string", "default": resolved["chrome"], "description": "Chrome 可执行文件路径"},
+                        "headed": {"type": "boolean", "default": False, "description": "以有头窗口模式运行 Chrome（默认无头后台；用于人工完成验证滑块）"},
                     },
                 },
                 "output": {
@@ -201,14 +204,15 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                 },
                 "constraints": [
                     "处理串行执行，复用同一个 Chrome 与标签页",
+                    "Chrome 默认无头后台运行（不弹窗），--headed 切换有头窗口",
                     "单条失败不中断整批，结果中逐条给出结构化错误",
-                    "需要人工完成抖音验证滑块时该条失败，人工处理后可重跑",
+                    "需要人工完成抖音验证滑块时该条失败，用 --headed 重跑后人工处理",
                 ],
             }
         ],
         "side_effects": {
             "filesystem": [resolved["output_dir"]],
-            "process": ["Chrome（独立 Profile + CDP 调试端口）"],
+            "process": ["Chrome（独立 Profile + CDP 调试端口，默认无头后台）"],
             "network": ["抖音页面与 douyinvod.com 视频流"],
         },
         "not_provided": {
@@ -269,6 +273,68 @@ def chrome_ready(port: int) -> bool:
         return False
 
 
+LAUNCH_MODE_MARKER = "launch-mode.txt"
+
+
+def _write_launch_mode_marker(headless: bool) -> None:
+    """记录本工具最近一次拉起的 Chrome 模式（无头时 UA 指纹已被覆盖，标记文件更可靠）。"""
+    try:
+        with open(os.path.join(data_dir(), LAUNCH_MODE_MARKER), "w", encoding="utf-8") as fh:
+            fh.write("headless" if headless else "headed")
+    except OSError:
+        pass
+
+
+def chrome_current_headless(port: int) -> bool:
+    """判定占用端口的 Chrome 是否无头：UA 含 HeadlessChrome 直接判定，否则读启动标记。"""
+    try:
+        with urllib.request.urlopen(cdpx_url(port, "/json/version"), timeout=2) as resp:
+            info = json.load(resp)
+        if "HeadlessChrome" in (info.get("User-Agent") or ""):
+            return True
+    except Exception:
+        pass
+    try:
+        with open(os.path.join(data_dir(), LAUNCH_MODE_MARKER), "r", encoding="utf-8") as fh:
+            return fh.read().strip() == "headless"
+    except OSError:
+        return False
+
+
+def browser_close(port: int = DEBUG_PORT, timeout: float = 10.0) -> bool:
+    """向浏览器级 CDP 端点发送 Browser.close，优雅关闭整个 Chrome 实例。"""
+    try:
+        with urllib.request.urlopen(cdpx_url(port, "/json/version"), timeout=5) as resp:
+            info = json.load(resp)
+        ws_url = info.get("webSocketDebuggerUrl")
+        if not ws_url:
+            return False
+        ws = websocket.create_connection(ws_url, timeout=timeout)
+        try:
+            ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+            try:
+                while True:
+                    res = json.loads(ws.recv())
+                    if res.get("id") == 1:
+                        break
+            except (websocket.WebSocketConnectionClosedException, ConnectionError, OSError):
+                pass  # Chrome 关闭时通常直接断开连接，视为已请求成功
+        finally:
+            ws.close()
+        return True
+    except Exception:
+        return False
+
+
+def wait_chrome_exit(port: int = DEBUG_PORT, timeout: float = 10.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not chrome_ready(port):
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def _seed_profile_preferences(profile_dir: str, download_dir: str) -> None:
     """写入 Chrome 偏好：默认下载目录指向本项目下载目录（等价原 PS1 逻辑）。"""
     pref_dir = os.path.join(profile_dir, "Default")
@@ -308,8 +374,9 @@ def start_chrome(
     profile_dir: str | None = None,
     port: int = DEBUG_PORT,
     download_dir: str | None = None,
+    headless: bool = True,
 ) -> int:
-    """启动独立的 Chrome 自动化窗口（持久化 Profile + CDP 调试端口）。
+    """启动独立的 Chrome 自动化实例（持久化 Profile + CDP 调试端口；默认无头后台）。
 
     sh-ai-todo: 改为子进程执行 start_chrome 函数，这个函数的作用就是启动这个 start_chrome.ps1 脚本，但是我希望这个脚本内容是嵌在 start_chrome 函数里的
 
@@ -325,7 +392,7 @@ def start_chrome(
     os.makedirs(profile, exist_ok=True)
     _seed_profile_preferences(profile, downloads)
 
-    ps1 = _build_embedded_ps1(chrome_path, profile, port, url)
+    ps1 = _build_embedded_ps1(chrome_path, profile, port, url, headless)
     encoded = base64.b64encode(ps1.encode("utf-16-le")).decode("ascii")
     proc = _run_hidden(
         [
@@ -346,10 +413,11 @@ def start_chrome(
     match = re.search(r"ProcessId:\s*(\d+)", output)
     if not match:
         raise AppError("chrome_launch_failed", "未能解析 Chrome 进程号", output[:500])
+    _write_launch_mode_marker(headless)
     return int(match.group(1))
 
 
-def _build_embedded_ps1(chrome_path: str, profile_dir: str, port: int, url: str) -> str:
+def _build_embedded_ps1(chrome_path: str, profile_dir: str, port: int, url: str, headless: bool = True) -> str:
     """生成内嵌 PowerShell 脚本（单引号字符串，内部单引号需翻倍转义）。"""
 
     def q(value: str) -> str:
@@ -360,6 +428,7 @@ def _build_embedded_ps1(chrome_path: str, profile_dir: str, port: int, url: str)
         "$profile = " + q(profile_dir) + "\n"
         "$Url = " + q(url) + "\n"
         f"$port = {port}\n"
+        "$headless = " + ("$true" if headless else "$false") + "\n"
         "\n"
         "# Ensure preferences (Downloads folder and developer mode)\n"
         '$prefDir = Join-Path $profile "Default"\n'
@@ -367,8 +436,21 @@ def _build_embedded_ps1(chrome_path: str, profile_dir: str, port: int, url: str)
         "    New-Item -ItemType Directory -Path $prefDir -Force | Out-Null\n"
         "}\n"
         "\n"
+        "# Headless: new headless mode + fingerprint mitigation (real-version UA, autoplay, desktop size)\n"
+        "$flags = ''\n"
+        "if ($headless) {\n"
+        "    try { $ver = (Get-Item $chrome).VersionInfo.ProductVersion } catch { $ver = '' }\n"
+        "    $flags = ' --headless --mute-audio --autoplay-policy=no-user-gesture-required "
+        "--window-size=1380,850 --disable-blink-features=AutomationControlled'\n"
+        "    if ($ver) {\n"
+        "        $UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/' + $ver + ' Safari/537.36'\n"
+        "        $flags = $flags + ' --user-agent=\"' + $UA + '\"'\n"
+        "    }\n"
+        "}\n"
+        "\n"
         '$cmdline = "`"$chrome`" --user-data-dir=`"$profile`" --no-first-run '
-        "--no-default-browser-check --remote-debugging-port=$port --remote-allow-origins=* "
+        "--no-default-browser-check --remote-debugging-port=$port --remote-allow-origins=*$flags "
         '`"$Url`""\n'
         "\n"
         "$res = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
@@ -383,17 +465,28 @@ def ensure_chrome_running(
     chrome_path: str = CHROME_PATH,
     profile_dir: str | None = None,
     download_dir: str | None = None,
+    headless: bool = True,
 ) -> bool:
     if chrome_ready(port):
-        return True
+        if chrome_current_headless(port) == headless:
+            return True
+        print("[*] Chrome running in a different mode; closing it to relaunch...", file=sys.stderr)
+        browser_close(port)
+        wait_chrome_exit(port)
 
-    print("[*] Launching Chrome automation window (with persistent profile)...", file=sys.stderr)
+    print(
+        "[*] Launching Chrome (headless background)..."
+        if headless
+        else "[*] Launching Chrome window (headed)...",
+        file=sys.stderr,
+    )
     start_chrome(
         "https://www.douyin.com",
         chrome_path=chrome_path,
         profile_dir=profile_dir,
         port=port,
         download_dir=download_dir,
+        headless=headless,
     )
 
     for _ in range(15):
@@ -736,6 +829,7 @@ def run_downloads(
     port: int,
     chrome_path: str = CHROME_PATH,
     profile_dir: str | None = None,
+    headless: bool = True,
     emit: Callable[[str], None] = lambda _msg: None,
 ) -> tuple[RunResult | None, AppError | None]:
     """编排：提取链接 → 启动/复用 Chrome → 串行逐条下载 → 汇总。
@@ -750,7 +844,13 @@ def run_downloads(
         return (result if extracted.skipped else None), AppError(code, ERROR_MESSAGES[code])
 
     try:
-        ensure_chrome_running(port, chrome_path=chrome_path, profile_dir=profile_dir, download_dir=output_dir)
+        ensure_chrome_running(
+            port,
+            chrome_path=chrome_path,
+            profile_dir=profile_dir,
+            download_dir=output_dir,
+            headless=headless,
+        )
     except AppError as exc:
         return result, exc
 
@@ -853,11 +953,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug-port", type=int, default=DEBUG_PORT, help=f"Chrome CDP 端口（默认 {DEBUG_PORT}）")
     parser.add_argument("--profile-dir", default=None, help="Chrome 专用 Profile 目录（默认项目数据目录下 chrome-profile）")
     parser.add_argument("--chrome", default=CHROME_PATH, help="Chrome 可执行文件路径")
+    parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="以有头窗口模式运行 Chrome（默认无头后台；用于人工完成验证滑块）",
+    )
     parser.add_argument("--version", action="version", version=f"{PROG} {VERSION}")
     return parser
 
 
-def render_text(result: RunResult, output_dir: str) -> None:
+def render_text(result: RunResult, output_dir: str, headless: bool = True) -> None:
     for record in result.records:
         if record.ok:
             print(f"[OK]   {record.video_url}")
@@ -874,7 +979,13 @@ def render_text(result: RunResult, output_dir: str) -> None:
         f"跳过 {len(result.skipped)}；下载目录 {output_dir}"
     )
     if result.failed and not result.succeeded:
-        print("提示: 若 Chrome 窗口出现验证滑块，请人工完成后重跑。", file=sys.stderr)
+        if headless:
+            print(
+                "提示: 可能触发了抖音验证滑块：加 --headed 重跑，在弹出的 Chrome 窗口中人工完成验证。",
+                file=sys.stderr,
+            )
+        else:
+            print("提示: 若 Chrome 窗口出现验证滑块，请人工完成后重跑。", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -924,6 +1035,7 @@ def main(argv: list[str] | None = None) -> int:
         port=args.debug_port,
         chrome_path=args.chrome,
         profile_dir=args.profile_dir,
+        headless=not args.headed,
         emit=emit,
     )
 
@@ -934,7 +1046,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(payload, ensure_ascii=False))
         else:
             if data:
-                render_text(result, output_dir)  # type: ignore[arg-type]
+                render_text(result, output_dir, headless=not args.headed)  # type: ignore[arg-type]
             print(f"错误: {error.message}", file=sys.stderr)
         return 2
 
@@ -954,7 +1066,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(json.dumps(envelope_ok(result.to_data()), ensure_ascii=False))
     else:
-        render_text(result, output_dir)
+        render_text(result, output_dir, headless=not args.headed)
     return 1 if result.failed else 0
 
 

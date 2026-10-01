@@ -4,7 +4,7 @@
 
 ## 工作原理
 
-1. **持久化浏览器会话**：通过独立专用 Profile 运行 Chrome，登录状态与 Cookie 永久保留，不污染日常浏览器。
+1. **持久化浏览器会话**：通过独立专用 Profile 运行 Chrome（**默认无头后台，不弹窗**），登录状态与 Cookie 永久保留，不污染日常浏览器。
 2. **底层网络流嗅探**：通过 CDP 连接（默认端口 9222），在网页视频播放时从浏览器底层资源通道（`<video>` 元素与 `performance.getEntriesByType('resource')`）截获无水印高清 MP4 CDN 直链。
 3. **免签名免反爬**：不做 a_bogus / msToken 签名逆向，直接复用真实浏览器的播放鉴权与 Cookie。
 4. **自动落盘**：默认保存到 `~/Downloads`，同名文件自动加 `_1`、`_2` 后缀，不覆盖既有文件。
@@ -76,7 +76,23 @@ JSON 包络（仓库统一约定）：
 | `--debug-port` | `9222` | Chrome CDP 调试端口 |
 | `--profile-dir` | `%APPDATA%\language_projects\douyin_downloader\chrome-profile` | Chrome 专用 Profile |
 | `--chrome` | `C:\Program Files\Google\Chrome\Application\chrome.exe` | Chrome 可执行文件 |
+| `--headed` | 关 | 以有头窗口模式运行 Chrome（默认无头后台；用于人工完成验证滑块） |
 | `--json` / `--schema` | 关 | 机器输出 / 契约导出 |
+
+## 打包为 exe（Nuitka）
+
+```powershell
+cd D:\Users\language_projects\python_projects\douyin_downloader
+uv run scripts\build_exe.py              # onefile 单文件 -> dist\douyin_dl.exe
+uv run scripts\build_exe.py --dir        # standalone 文件夹版（启动更快）
+```
+
+- **前提**：MSVC（VS 2022 Build Tools，Nuitka 编译用），首次编译需数分钟。
+- **产物**：`dist\douyin_dl.exe`；目标机无需 Python/uv，但**仍需已安装 Chrome**（`--chrome` 可指定路径）。
+- **依赖要点**：打包脚本环境必须同时含 `nuitka` 与 `websocket-client`（脚本 PEP 723 头已声明）——Nuitka 靠编译期解释器定位第三方包，缺了不会被打进 exe。
+- **图标**：默认带 Python 双蛇标志（父仓库 `python-default.ico`），详见父仓库《python exe 默认图标》文档；`--icon` / `--no-icon` 可覆盖。
+- onefile 解压目录固定在 `%LOCALAPPDATA%\douyin_dl\<版本>`（只解压一次，后续启动约 165ms）；版本升级后旧缓存目录不自动清理，偶尔手删即可；无签名 exe 可能被杀软误报。
+- `dist/` 与 `*.exe` 已被子仓 `.gitignore` 排除，属本地部署件，不入库。
 
 ## 数据目录
 
@@ -97,8 +113,9 @@ JSON 包络（仓库统一约定）：
 
 ## 已知限制
 
-1. **抖音风控可能返回「验证中间页」**：此时该条失败并给出 `stream_not_found`，需在弹出的 Chrome 窗口内人工完成验证滑块后重跑。工具不会伪造成功。
-2. **短链解析依赖网络**：解析失败的抖音链接按 `invalid_url` 如实失败（不静默丢弃）。
-3. **抓取依赖 Chrome 与 CDP**：Profile 首次使用或长时间未用后可能需要重新登录/验证。
-4. **需要 Chrome 已安装**在 `--chrome` 指定的路径。
-5. 标题含非法字符时会被替换为 `_`，文件名主干最长 50 字符。
+1. **抖音风控可能返回「验证中间页」**：此时该条失败并给出 `stream_not_found`。默认无头模式没有窗口可操作，用 `--headed` 重跑，在弹出的 Chrome 窗口内人工完成验证滑块后再重跑。工具不会伪造成功。
+2. **无头 Chrome 进程驻留后台**：运行结束后 Chrome 实例不退出（复用登录态与实例，后续运行秒连），属设计行为。结束方式：`--headed` 运行时手动关窗，或任务管理器结束对应 Profile 的 `chrome.exe`。
+3. **短链解析依赖网络**：解析失败的抖音链接按 `invalid_url` 如实失败（不静默丢弃）。
+4. **抓取依赖 Chrome 与 CDP**：Profile 首次使用或长时间未用后可能需要重新登录/验证。
+5. **需要 Chrome 已安装**在 `--chrome` 指定的路径。
+6. 标题含非法字符时会被替换为 `_`，文件名主干最长 50 字符。
