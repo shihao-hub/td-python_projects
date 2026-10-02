@@ -1,13 +1,14 @@
-# Douyin Video Downloader (CDP-based)
+# Douyin/Bilibili Video Downloader (CDP + API)
 
-基于 Chrome DevTools Protocol (CDP) 的无损高清抖音视频下载工具。**uv 单脚本**形态：一个 `douyin_dl.py` 自带依赖声明，无需 `pyproject.toml` / `requirements.txt` / 虚拟环境目录。
+抖音 + B 站视频下载工具（uv 单脚本）。抖音走 CDP 无损高清直链嗅探；B 站走公开 API + 浏览器登录态（cookie）路线，清晰度跟随账号权益（1080P+）。**单文件形态**：一个 `douyin_dl.py` 自带依赖声明，无需 `pyproject.toml` / `requirements.txt` / 虚拟环境目录。
 
 ## 工作原理
 
 1. **持久化浏览器会话**：通过独立专用 Profile 运行 Chrome（**默认无头后台，不弹窗**），登录状态与 Cookie 永久保留，不污染日常浏览器。
-2. **底层网络流嗅探**：通过 CDP 连接（默认端口 9222），在网页视频播放时从浏览器底层资源通道（`<video>` 元素与 `performance.getEntriesByType('resource')`）截获无水印高清 MP4 CDN 直链。
-3. **免签名免反爬**：不做 a_bogus / msToken 签名逆向，直接复用真实浏览器的播放鉴权与 Cookie。
-4. **自动落盘**：默认保存到 `~/Downloads`，同名文件自动加 `_1`、`_2` 后缀，不覆盖既有文件。
+2. **抖音 — 底层网络流嗅探**：通过 CDP 连接（默认端口 9222），在网页视频播放时从浏览器底层资源通道（`<video>` 元素与 `performance.getEntriesByType('resource')`）截获无水印高清 MP4 CDN 直链。
+3. **抖音 — 免签名免反爬**：不做 a_bogus / msToken 签名逆向，直接复用真实浏览器的播放鉴权与 Cookie。
+4. **B 站 — API + 登录态**：直接调 B 站公开 web API（view / playurl，免签名）拿 DASH 流地址，登录态经 CDP 从同一 Chrome Profile 读取（含 HttpOnly 的 SESSDATA），清晰度跟随账号权益；DASH 音视频分离流经 `ffmpeg -c copy` 无损合并。
+5. **自动落盘**：默认保存到 `~/Downloads`，同名文件自动加 `_1`、`_2` 后缀，不覆盖既有文件。
 
 ## 依赖与单脚本形态
 
@@ -27,16 +28,27 @@
 
 ### 从一段文本里提取链接并下载
 
-传入抖音分享文案即可，工具会自己找出其中的链接：
+传入抖音分享文案、B 站链接或裸 BV 号即可，工具会自己找出其中的链接并按域名自动分流：
 
 ```powershell
 cd D:\Users\language_projects\python_projects\douyin_downloader
+
+# 抖音分享文案
 uv run douyin_dl.py "8.74 S@Y.ZZ Uyt:/ :3pm 09/26 5 分钟学会写架构设计 https://v.douyin.com/EBgtkB68340/ 复制此链接，打开Dou音搜索，直接观看视频！"
+
+# B 站：短链 / 主站链接 / 裸 BV 号等效
+uv run douyin_dl.py "https://b23.tv/ApmE1Nd"
+uv run douyin_dl.py "BV1B6YR6gEyd"
+
+# 混合输入：一条命令两类链接都下载
+uv run douyin_dl.py "https://v.douyin.com/EBgtkB68340/ https://b23.tv/ApmE1Nd"
 ```
 
 规则：
 
-- 文本中的**所有**链接都会被检查，抖音链接逐个下载（串行，复用同一个 Chrome 与标签页）；**非抖音链接跳过**，并在结果里明确列出（不会静默丢弃）。
+- 文本中的**所有**链接都会被检查：抖音与 B 站链接逐个下载（串行，复用同一个 Chrome 与标签页）；**不支持的链接跳过**，并在结果里明确列出（`reason: not_supported`，不会静默丢弃）。
+- 裸 BV 号（`BV` + 10 位字母数字）与 URL 中已带的 BV 号自动去重，不会重复下载。
+- B 站多 P 视频：链接带 `?p=N` 时只下指定 P；不带 `p` 且为多 P 时**全部下载**（每 P 一条记录，文件名带 `_P{n}`）。
 - 支持多段参数（以换行拼接）、字面 `\n` 作为换行、以及从管道读入：
 
 ```powershell
@@ -44,8 +56,18 @@ Get-Content 文案.txt -Raw | uv run douyin_dl.py --json
 uv run douyin_dl.py --json -            # '-' 显式表示从 stdin 读
 ```
 
-- 短链（`v.douyin.com/xxxx`）会自动跟随重定向解析为 `/video/<id>`。
-- **必须能提取到抖音链接**，否则按错误退出（无内置默认链接）。
+- 抖音短链（`v.douyin.com/xxxx`）与 B 站短链（`b23.tv/xxxx`）都会自动跟随重定向解析。
+- **必须能提取到抖音或 B 站链接**，否则按错误退出（无内置默认链接）。
+
+### B 站首次登录引导
+
+B 站走登录态路线（清晰度跟随账号权益），未登录时该批 B 站链接按 `bilibili_not_logged_in` 失败：
+
+```powershell
+uv run douyin_dl.py --headed "https://b23.tv/ApmE1Nd"
+```
+
+工具会弹出 Chrome 窗口并打开 bilibili.com，人工完成登录后**重跑命令**即可（Cookie 随专用 Profile 持久化并自动续期，之后无需再登录）。
 
 ### 机器可读输出与契约导出
 
@@ -63,10 +85,10 @@ JSON 包络（仓库统一约定）：
 {"ok": false, "error": {"code": "no_url", "message": "输入文本中未发现任何链接"}, "data": {"downloaded": [], "skipped": [], "summary": {"total": 0, "succeeded": 0, "failed": 0, "skipped": 0}}}
 ```
 
-- 成功项字段：`input_url` / `video_url` / `video_id` / `title` / `path` / `bytes`；失败项另带 `error{code,message,detail}`。
+- 成功项字段：`input_url` / `video_url` / `video_id` / `title` / `path` / `bytes`；失败项另带 `error{code,message,detail}`。B 站多 P 时 `downloaded` 含多条记录（`video_id` 形如 `BVxxx_p2`）。
 - 部分成功时 `ok:false` 同时携带完整 `data`（有效结果不丢）。
-- 错误码：`no_input`、`no_url`、`no_douyin_url`、`chrome_launch_failed`、`invalid_url`、`stream_not_found`、`download_failed`。
-- 退出码：`0` 全部成功；`1` 存在失败项或部分成功；`2` 参数错误、输入为空、或没有可处理的抖音链接。
+- 错误码：`no_input`、`no_url`、`no_douyin_url`、`chrome_launch_failed`、`invalid_url`、`stream_not_found`、`download_failed`、`bilibili_not_logged_in`（B 站 profile 无 SESSDATA）、`bilibili_api_error`（view/playurl 调用失败）、`ffmpeg_merge_failed`（合并失败）。
+- 退出码：`0` 全部成功；`1` 存在失败项或部分成功；`2` 参数错误、输入为空、或没有可处理的抖音/B 站链接。
 
 ### 可选参数
 
@@ -108,14 +130,17 @@ uv run scripts\build_exe.py --dir        # standalone 文件夹版（启动更�
 ## 实现要点
 
 - **Chrome 启动逻辑内嵌在 `start_chrome()` 函数里**：原先的 `start_chrome.ps1` 内容已并入 `douyin_dl.py`，经 `-EncodedCommand`（UTF-16LE + base64）交给 PowerShell 执行，避免中文/引号/空格路径的转义问题；仍走 PowerShell 是因为 `Invoke-CimMethod Win32_Process Create` 属于「创建即返回」的非启动阻塞方式（`&` 调用符会挂住 Python 进程）。
-- **单文件分层**：契约层（错误码/JSON 包络/schema）→ 基础设施层（Chrome/CDP/HTTP）→ Service 层（提链、归一化、批量编排，不碰标准流）→ CLI 适配层（参数解析、人读/JSON 渲染、退出码映射）。
+- **单文件分层**：契约层（错误码/JSON 包络/schema）→ 基础设施层（Chrome/CDP/HTTP/ffmpeg）→ Service 层（提链、归一化、批量编排，不碰标准流）→ CLI 适配层（参数解析、人读/JSON 渲染、退出码映射）。
+- **B 站链路（API + cookie 混合）**：`resolve_bilibili_url` 解析短链/裸 BV 号 → `fetch_bili_view`（标题 + 多 P pages）→ `fetch_bili_playurl`（DASH 流，qn=127 按登录权益下发）→ `pick_bili_streams`（video 取 id 最大档、audio 取首项；老视频无 DASH 时走 durl 单流兼容分支）→ 双流下载（必带 `Referer: https://www.bilibili.com/`，否则 CDN 403）→ `ffmpeg -c copy` 合并。登录态经 CDP `Network.getCookies` 读取（可读 HttpOnly cookie），与抖音共用同一 Profile。
 - **不提供 MCP**：本工具是本地一次性下载动作，没有跨会话的状态查询需求，按《CLI 工具开发标准》§5.5 以 `interface: "cli"` 声明契约（`schema` 导出的是 CLI 契约，不是 MCP 工具目录）。
 
 ## 已知限制
 
 1. **抖音风控可能返回「验证中间页」**：此时该条失败并给出 `stream_not_found`。默认无头模式没有窗口可操作，用 `--headed` 重跑，在弹出的 Chrome 窗口内人工完成验证滑块后再重跑。工具不会伪造成功。
-2. **无头 Chrome 进程驻留后台**：运行结束后 Chrome 实例不退出（复用登录态与实例，后续运行秒连），属设计行为。结束方式：`--headed` 运行时手动关窗，或任务管理器结束对应 Profile 的 `chrome.exe`。
-3. **短链解析依赖网络**：解析失败的抖音链接按 `invalid_url` 如实失败（不静默丢弃）。
-4. **抓取依赖 Chrome 与 CDP**：Profile 首次使用或长时间未用后可能需要重新登录/验证。
-5. **需要 Chrome 已安装**在 `--chrome` 指定的路径。
-6. 标题含非法字符时会被替换为 `_`，文件名主干最长 50 字符。
+2. **B 站需要登录态**：未登录（Profile 无 SESSDATA）时 B 站链接整批按 `bilibili_not_logged_in` 失败；SESSDATA 过期后同样处理，重新 `--headed` 登录一次即可。登录态质量决定清晰度档位（工具取服务端按权益下发的最高档）。
+3. **B 站合并依赖 ffmpeg**：本机 PATH 需有 `ffmpeg`（合并用 `-c copy` 无重编码，秒级完成）；缺失时 DASH 视频按 `ffmpeg_merge_failed` 失败，临时流会自动清理。
+4. **无头 Chrome 进程驻留后台**：运行结束后 Chrome 实例不退出（复用登录态与实例，后续运行秒连），属设计行为。结束方式：`--headed` 运行时手动关窗，或任务管理器结束对应 Profile 的 `chrome.exe`。
+5. **短链解析依赖网络**：解析失败的抖音/B 站短链按 `invalid_url` 如实失败（不静默丢弃）。
+6. **抓取依赖 Chrome 与 CDP**：Profile 首次使用或长时间未用后可能需要重新登录/验证（抖音验证滑块、B 站登录各一次）。
+7. **需要 Chrome 已安装**在 `--chrome` 指定的路径。
+8. 标题含非法字符时会被替换为 `_`，文件名主干最长 50 字符；B 站多 P 追加 `_P{n}` 后缀。

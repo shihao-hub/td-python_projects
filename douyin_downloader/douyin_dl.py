@@ -2,18 +2,22 @@
 # requires-python = ">=3.12"
 # dependencies = ["websocket-client>=1.8"]
 # ///
-"""抖音视频下载器（CDP 版，uv 单脚本）。
+"""抖音/B 站视频下载器（uv 单脚本）。
 
 用法：
-    uv run douyin_dl.py "<含抖音链接的文本>" [--json] [--output-dir DIR] [--headed]
+    uv run douyin_dl.py "<含抖音或 B 站链接的文本>" [--json] [--output-dir DIR] [--headed]
     Get-Content 文案.txt -Raw | uv run douyin_dl.py --json
     uv run douyin_dl.py schema          # 导出 CLI 契约 JSON（零业务 I/O）
 
-默认无头后台运行 Chrome（不弹窗）；传 --headed 切换有头窗口（人工完成验证用）。
+抖音：默认无头 Chrome 经 CDP 嗅探无水印视频流直链后下载；--headed 切换有头窗口（人工完成验证用）。
+B 站：API + 浏览器登录态路线——复用同一 Chrome profile 的 cookie（SESSDATA），
+     未登录时按 bilibili_not_logged_in 失败（首次先 --headed 登录一次 bilibili.com）；
+     DASH 音视频分离流经 ffmpeg -c copy 合并，需本机已安装 ffmpeg。
+支持裸 BV 号（BV+10 位字母数字）、b23.tv 短链、bilibili.com 链接、多 P（?p=N 或全量下载）。
 
 分层（单文件内，遵循《CLI 工具开发标准》的 Service 核心 + 薄壳原则）：
     - 契约层：错误码、JSON 包络、schema 定义（不导入任何业务依赖）
-    - 基础设施层：Chrome 启动、CDP 调用、HTTP 下载（唯一接触外部资源的地方）
+    - 基础设施层：Chrome 启动、CDP 调用、HTTP 下载、ffmpeg 合并（唯一接触外部资源的地方）
     - Service 层：文本提链、链接归一化、批量下载编排（不读写标准流、不退出进程）
     - CLI 适配层：参数解析、人读/JSON 渲染、退出码映射
 """
@@ -36,7 +40,7 @@ from typing import Any, Callable, Iterable
 
 import websocket
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 PROG = "douyin_dl"
 # 项目目录名（monorepo 目录名）用下划线，与 CLI 程序名 PROG 区分
 PROJECT_DIR_NAME = "douyin_downloader"
@@ -58,11 +62,14 @@ USER_AGENT = (
 ERROR_MESSAGES = {
     "no_input": "输入为空，请传入文本参数或通过管道提供内容",
     "no_url": "输入文本中未发现任何链接",
-    "no_douyin_url": "输入文本中没有抖音链接，全部已跳过",
+    "no_douyin_url": "输入文本中没有抖音/B 站链接，全部已跳过",
     "chrome_launch_failed": "Chrome 启动失败",
     "invalid_url": "抖音链接非法或短链解析失败，未能得到视频 ID",
     "stream_not_found": "未能在页面中捕获视频流（可能需要人工完成验证）",
     "download_failed": "视频流下载失败",
+    "bilibili_not_logged_in": "B 站未登录：加 --headed 运行，在弹出的 Chrome 窗口中登录 bilibili.com 后重跑",
+    "bilibili_api_error": "B 站接口调用失败",
+    "ffmpeg_merge_failed": "音视频合并失败（ffmpeg）",
 }
 
 
@@ -92,7 +99,7 @@ def _schema_text_property() -> dict[str, Any]:
         "type": "string",
         "minLength": 1,
         "maxLength": 100000,
-        "description": "含抖音链接的文本，可包含多个链接与无关文案",
+        "description": "含抖音/B 站链接（或裸 BV 号）的文本，可包含多个链接与无关文案",
     }
 
 
@@ -120,7 +127,7 @@ def _schema_response_property() -> dict[str, Any]:
     skipped = _obj(
         {
             "url": {"type": "string"},
-            "reason": {"type": "string", "enum": ["not_douyin"]},
+            "reason": {"type": "string", "enum": ["not_supported"]},
         },
         required=["url", "reason"],
     )
@@ -170,11 +177,11 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
         "name": PROG,
         "version": VERSION,
         "interface": "cli",
-        "description": "从一段文本中提取抖音视频链接，经 Chrome CDP 捕获无水印视频流并下载到本地",
+        "description": "从一段文本中提取抖音/B 站视频链接，经 Chrome CDP 捕获无水印视频流并下载到本地；B 站走 API + 浏览器登录态（cookie）路线",
         "commands": [
             {
                 "name": PROG,
-                "summary": "提取文本中的抖音链接并下载（串行逐个处理，非抖音链接跳过）",
+                "summary": "提取文本中的抖音/B 站链接并下载（串行逐个处理，按域名自动分流；不支持的链接跳过）",
                 "input": {
                     "text": {
                         "type": "array",
@@ -207,13 +214,16 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                     "Chrome 默认无头后台运行（不弹窗），--headed 切换有头窗口",
                     "单条失败不中断整批，结果中逐条给出结构化错误",
                     "需要人工完成抖音验证滑块时该条失败，用 --headed 重跑后人工处理",
+                    "B 站链接复用同一 Chrome profile 的登录态（SESSDATA），未登录时该批按 bilibili_not_logged_in 失败；首次使用先 --headed 登录一次 bilibili.com",
+                    "B 站视频为 DASH 音视频分离流，下载后经 ffmpeg -c copy 合并，需本机已安装 ffmpeg",
+                    "裸 BV 号（BV+10 位字母数字）与 b23.tv 短链、bilibili.com 链接等效支持",
                 ],
             }
         ],
         "side_effects": {
             "filesystem": [resolved["output_dir"]],
             "process": ["Chrome（独立 Profile + CDP 调试端口，默认无头后台）"],
-            "network": ["抖音页面与 douyinvod.com 视频流"],
+            "network": ["抖音页面与 douyinvod.com 视频流", "B 站 API（api.bilibili.com）与 bilivideo CDN 视频流"],
         },
         "not_provided": {
             "mcp": "本工具为本地一次性下载动作，无跨会话状态查询需求，按标准 §5.5 以 interface=cli 声明契约",
@@ -527,6 +537,31 @@ def eval_cdp(ws_url: str, expression: str, timeout: float = 20.0) -> Any:
         ws.close()
 
 
+def cdp_call(ws_url: str, method: str, params: dict[str, Any] | None = None, timeout: float = 20.0) -> dict[str, Any]:
+    """发送单条 CDP 命令并等待同名响应，返回 result 字段。"""
+    ws = websocket.create_connection(ws_url, timeout=timeout)
+    try:
+        msg_id = int(time.time() * 1000) % 1000000
+        ws.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
+        while True:
+            res = json.loads(ws.recv())
+            if res.get("id") == msg_id:
+                if "error" in res:
+                    raise RuntimeError(f"CDP {method} 失败: {res['error']}")
+                return res.get("result", {})
+    finally:
+        ws.close()
+
+
+def cdp_get_cookies(port: int, url: str) -> dict[str, str]:
+    """经 CDP Network.getCookies 读取指定 URL 所属域的 cookie（含 HttpOnly），返回 name->value。"""
+    pages = [t for t in get_targets(port) if t.get("type") == "page"]
+    if not pages:
+        raise RuntimeError("无可用 page target，无法读取 cookie")
+    result = cdp_call(pages[0]["webSocketDebuggerUrl"], "Network.getCookies", {"urls": [url]})
+    return {c["name"]: c["value"] for c in result.get("cookies", [])}
+
+
 def navigate_page(ws_url: str, url: str, timeout: float = 20.0) -> None:
     ws = websocket.create_connection(ws_url, timeout=timeout)
     try:
@@ -539,9 +574,9 @@ def navigate_page(ws_url: str, url: str, timeout: float = 20.0) -> None:
         ws.close()
 
 
-def open_douyin_tab(target_url: str, port: int = DEBUG_PORT) -> str:
-    """复用已有抖音标签页，必要时新建，返回该页的 webSocketDebuggerUrl。"""
-    tabs = [t for t in get_targets(port) if t.get("type") == "page" and "douyin.com" in t.get("url", "")]
+def open_tab(target_url: str, port: int = DEBUG_PORT, host_filter: str = "douyin.com") -> str:
+    """复用已有目标站点标签页，必要时新建，返回该页的 webSocketDebuggerUrl。"""
+    tabs = [t for t in get_targets(port) if t.get("type") == "page" and host_filter in t.get("url", "")]
     if tabs:
         page = tabs[0]
         ws_url = page["webSocketDebuggerUrl"]
@@ -556,6 +591,13 @@ def open_douyin_tab(target_url: str, port: int = DEBUG_PORT) -> str:
     page = json.load(urllib.request.urlopen(req, timeout=10))
     time.sleep(3)
     return page["webSocketDebuggerUrl"]
+
+
+def http_get_json(url: str, headers: dict[str, str]) -> dict[str, Any]:
+    """带自定义请求头 GET 并解析 JSON 响应；失败抛出 urllib/OSError/ValueError 异常。"""
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.load(resp)
 
 
 def unique_path(directory: str, stem: str, suffix: str = ".mp4") -> str:
@@ -573,11 +615,14 @@ def unique_path(directory: str, stem: str, suffix: str = ".mp4") -> str:
     return candidate
 
 
-def download_stream(video_url: str, output_path: str) -> tuple[str, int]:
-    """下载视频流到指定路径（调用方保证 output_path 不冲突）。返回 (路径, 字节数)。"""
+def download_stream(video_url: str, output_path: str, headers: dict[str, str] | None = None) -> tuple[str, int]:
+    """下载视频流到指定路径（调用方保证 output_path 不冲突）。返回 (路径, 字节数)。
+
+    headers 缺省时使用抖音默认头（UA + 抖音 Referer）。
+    """
     req = urllib.request.Request(
         video_url,
-        headers={"User-Agent": USER_AGENT, "Referer": "https://www.douyin.com/"},
+        headers=headers or {"User-Agent": USER_AGENT, "Referer": "https://www.douyin.com/"},
     )
     downloaded = 0
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -598,6 +643,30 @@ def download_stream(video_url: str, output_path: str) -> tuple[str, int]:
     return output_path, downloaded
 
 
+def merge_av_streams(video_path: str, audio_path: str, output_path: str) -> bool:
+    """ffmpeg -c copy 合并 B 站 DASH 音视频流（无重编码）。"""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", video_path, "-i", audio_path, "-c", "copy", output_path],
+            capture_output=True,
+            creationflags=flags,
+        )
+    except OSError:
+        return False
+    return proc.returncode == 0
+
+
+def cleanup_files(*paths: str) -> None:
+    """尽力删除指定文件（临时流清理用），不存在或删不掉都静默。"""
+    for path in paths:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 # --------------------------------------------------------------------------
 # Service 层：文本提链、链接归一化、批量下载编排
 # --------------------------------------------------------------------------
@@ -605,6 +674,8 @@ def download_stream(video_url: str, output_path: str) -> tuple[str, int]:
 _URL_RE = re.compile(r"""https?://[^\s<>"'`（）()【】\[\]{}，。；、]+""", re.IGNORECASE)
 _TRAILING = "\"'`.,;:!?，。；：！？、）)】」》>"
 _DOUYIN_HOSTS = ("douyin.com", "iesdouyin.com")
+_BILI_HOSTS = ("bilibili.com", "b23.tv")
+_BV_RE = re.compile(r"\bBV[0-9A-Za-z]{10}\b")
 
 
 @dataclass
@@ -616,6 +687,7 @@ class SkippedLink:
 @dataclass
 class ExtractResult:
     douyin: list[str] = field(default_factory=list)
+    bilibili: list[str] = field(default_factory=list)
     skipped: list[SkippedLink] = field(default_factory=list)
 
 
@@ -685,19 +757,43 @@ def is_douyin_url(url: str) -> bool:
     return any(host == base or host.endswith("." + base) for base in _DOUYIN_HOSTS)
 
 
+def is_bilibili_url(url: str) -> bool:
+    host = urllib.parse.urlsplit(url).hostname or ""
+    host = host.lower().lstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return any(host == base or host.endswith("." + base) for base in _BILI_HOSTS)
+
+
 def extract_links(text: str) -> ExtractResult:
-    """从任意文本中提取链接：抖音链接按出现顺序去重收集，其余记为 skipped。"""
+    """从任意文本中提取链接：抖音/B 站链接按出现顺序去重收集，其余记为 skipped。
+
+    文本中的裸 BV 号（不在任何已收集 URL 内）归一化为 B 站视频页地址后进入 bilibili 队列。
+    """
     result = ExtractResult()
     seen: set[str] = set()
+    urls: list[str] = []
     for raw in _URL_RE.findall(text or ""):
         url = raw.rstrip(_TRAILING)
         if not url or url in seen:
             continue
         seen.add(url)
+        urls.append(url)
         if is_douyin_url(url):
             result.douyin.append(url)
+        elif is_bilibili_url(url):
+            result.bilibili.append(url)
         else:
-            result.skipped.append(SkippedLink(url=url, reason="not_douyin"))
+            result.skipped.append(SkippedLink(url=url, reason="not_supported"))
+
+    for bvid in _BV_RE.findall(text or ""):
+        if any(bvid in u for u in urls):
+            continue
+        normalized = f"https://www.bilibili.com/video/{bvid}"
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.bilibili.append(normalized)
     return result
 
 
@@ -726,6 +822,97 @@ def resolve_video_url(url: str) -> str:
 def extract_video_id(video_url: str) -> str:
     match = re.search(r"/video/(\d+)", video_url)
     return match.group(1) if match else ""
+
+
+# ------------------------- B 站 Service -------------------------
+
+
+def bili_headers(cookie_header: str = "") -> dict[str, str]:
+    """B 站 API 与 CDN 下载通用请求头（Referer 必带，否则 CDN 403）。"""
+    headers = {"User-Agent": USER_AGENT, "Referer": "https://www.bilibili.com/"}
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+    return headers
+
+
+def extract_bvid(text: str) -> tuple[str, int]:
+    """从 URL 或裸文本中提取 (bvid, page)。page 取 ?p=N 参数，无则 0。"""
+    match = re.search(r"/video/(BV[0-9A-Za-z]{10})", text) or re.search(r"\b(BV[0-9A-Za-z]{10})\b", text)
+    bvid = match.group(1) if match else ""
+    p_match = re.search(r"[?&]p=(\d+)", text)
+    return bvid, (int(p_match.group(1)) if p_match else 0)
+
+
+def resolve_bilibili_url(url: str) -> tuple[str, int]:
+    """解析 B 站输入：b23.tv 短链跟随重定向后提取，其余直接提取。返回 (bvid, page)。"""
+    final_url = url
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if host == "b23.tv":
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler)
+        try:
+            with opener.open(req, timeout=15) as resp:
+                resolved = resp.geturl()
+                if resolved:
+                    final_url = resolved
+        except (urllib.error.URLError, OSError, ValueError):
+            final_url = url
+    return extract_bvid(final_url)
+
+
+def fetch_bili_view(bvid: str, cookie_header: str) -> dict[str, Any]:
+    """获取 B 站视频元信息（标题、pages 多 P 列表）。API 失败抛 bilibili_api_error。"""
+    url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+    try:
+        payload = http_get_json(url, bili_headers(cookie_header))
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        raise AppError("bilibili_api_error", ERROR_MESSAGES["bilibili_api_error"], f"view 请求失败: {exc}")
+    if payload.get("code") != 0:
+        raise AppError(
+            "bilibili_api_error",
+            ERROR_MESSAGES["bilibili_api_error"],
+            f"view code={payload.get('code')} {payload.get('message')}",
+        )
+    return payload.get("data") or {}
+
+
+def fetch_bili_playurl(bvid: str, cid: Any, cookie_header: str) -> dict[str, Any]:
+    """获取 B 站播放地址（DASH 优先，qn=127 请求最高档，服务端按登录权益下发）。"""
+    url = (
+        f"https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}"
+        "&qn=127&fnval=16&fnver=0&platform=pc"
+    )
+    try:
+        payload = http_get_json(url, bili_headers(cookie_header))
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        raise AppError("bilibili_api_error", ERROR_MESSAGES["bilibili_api_error"], f"playurl 请求失败: {exc}")
+    if payload.get("code") != 0:
+        raise AppError(
+            "bilibili_api_error",
+            ERROR_MESSAGES["bilibili_api_error"],
+            f"playurl code={payload.get('code')} {payload.get('message')}",
+        )
+    return payload.get("data") or {}
+
+
+def pick_bili_streams(playurl: dict[str, Any]) -> tuple[str, str, str]:
+    """从 playurl 数据选流：dash.video 取 id 最大者（同 id 取先出现，B 站 avc1 优先排列），
+    dash.audio 取首项（B 站按质量降序，dolby/flac 在独立字段）。返回 (kind, video_url, audio_url)，
+    kind 为 "dash" 或 "durl"（老视频单流直链，audio_url 为空串）。"""
+    dash = playurl.get("dash")
+    if isinstance(dash, dict) and dash.get("video"):
+        videos = dash["video"]
+        best = videos[0]
+        for v in videos:
+            if v.get("id", 0) > best.get("id", 0):
+                best = v
+        audio_list = dash.get("audio") or []
+        audio_url = audio_list[0].get("baseUrl", "") if audio_list else ""
+        return "dash", best.get("baseUrl", ""), audio_url
+    durl = playurl.get("durl") or []
+    if durl:
+        return "durl", durl[0].get("url", ""), ""
+    raise AppError("stream_not_found", ERROR_MESSAGES["stream_not_found"])
 
 
 def clean_title(title: str, fallback: str) -> str:
@@ -822,6 +1009,117 @@ def download_one(
     return record
 
 
+def download_bilibili_one(
+    input_url: str,
+    *,
+    cookie_header: str,
+    output_dir: str,
+    emit: Callable[[str], None],
+) -> list[DownloadRecord]:
+    """处理单个 B 站输入（链接或裸 BV 号）：view → playurl → 选流 → 下载 → ffmpeg 合并。
+
+    多 P 视频返回多条记录（每 P 一条）；顶层失败归为单条失败记录，保证单条不中断整批。
+    """
+    try:
+        bvid, page = resolve_bilibili_url(input_url)
+        if not bvid:
+            raise AppError("invalid_url", ERROR_MESSAGES["invalid_url"], f"解析结果: {input_url}")
+
+        view = fetch_bili_view(bvid, cookie_header)
+        pages_all = view.get("pages") or []
+        if not pages_all:
+            pages_all = [{"page": 1, "cid": view.get("cid")}]
+
+        if page:
+            targets = [p for p in pages_all if p.get("page") == page]
+            if not targets:
+                raise AppError(
+                    "invalid_url",
+                    ERROR_MESSAGES["invalid_url"],
+                    f"分 P {page} 不存在（共 {len(pages_all)} P）: {bvid}",
+                )
+        else:
+            targets = pages_all
+        multi = len(targets) > 1
+
+        title = clean_title(str(view.get("title") or ""), f"bilibili_{bvid}")
+        records: list[DownloadRecord] = []
+        for p_info in targets:
+            page_no = p_info.get("page") or 1
+            stem = f"{title}_P{page_no}" if multi else title
+            record = DownloadRecord(
+                input_url=input_url,
+                ok=False,
+                video_url=f"https://www.bilibili.com/video/{bvid}?p={page_no}",
+                video_id=f"{bvid}_p{page_no}",
+                title=stem,
+            )
+            records.append(record)
+            video_tmp = ""
+            audio_tmp = ""
+            try:
+                playurl = fetch_bili_playurl(bvid, p_info.get("cid"), cookie_header)
+                kind, video_url, audio_url = pick_bili_streams(playurl)
+                if not video_url:
+                    raise AppError("stream_not_found", ERROR_MESSAGES["stream_not_found"])
+
+                if kind == "dash":
+                    if not audio_url:
+                        raise AppError("stream_not_found", ERROR_MESSAGES["stream_not_found"])
+                    output_path = unique_path(output_dir, stem)
+                    video_tmp = output_path + ".video.m4s"
+                    audio_tmp = output_path + ".audio.m4s"
+                    emit(f"[*] Downloading video stream (P{page_no})...")
+                    download_stream(video_url, video_tmp, bili_headers(cookie_header))
+                    emit(f"[*] Downloading audio stream (P{page_no})...")
+                    download_stream(audio_url, audio_tmp, bili_headers(cookie_header))
+                    emit(f"[*] Merging with ffmpeg (P{page_no})...")
+                    if not merge_av_streams(video_tmp, audio_tmp, output_path):
+                        raise AppError("ffmpeg_merge_failed", ERROR_MESSAGES["ffmpeg_merge_failed"])
+                    cleanup_files(video_tmp, audio_tmp)
+                else:
+                    # durl 老视频单流直链（FLV/MP4），无需合并
+                    suffix = ".flv" if ".flv" in video_url.split("?")[0] else ".mp4"
+                    output_path = unique_path(output_dir, stem, suffix)
+                    download_stream(video_url, output_path, bili_headers(cookie_header))
+
+                record.ok = True
+                record.path = output_path
+                record.bytes = os.path.getsize(output_path)
+                emit(f"[+] Download complete: {output_path}")
+            except AppError as exc:
+                cleanup_files(video_tmp, audio_tmp)
+                record.error_code = exc.code
+                record.error_message = exc.message
+                record.error_detail = exc.detail
+            except Exception as exc:  # 基础设施异常统一归类，不向用户抛裸栈
+                cleanup_files(video_tmp, audio_tmp)
+                record.error_code = "download_failed"
+                record.error_message = ERROR_MESSAGES["download_failed"]
+                record.error_detail = f"{type(exc).__name__}: {exc}"
+        return records
+    except AppError as exc:
+        return [
+            DownloadRecord(
+                input_url=input_url,
+                ok=False,
+                error_code=exc.code,
+                error_message=exc.message,
+                error_detail=exc.detail,
+            )
+        ]
+    except Exception as exc:
+        return [
+            DownloadRecord(
+                input_url=input_url,
+                ok=False,
+                error_code="download_failed",
+                error_message=ERROR_MESSAGES["download_failed"],
+                error_detail=f"{type(exc).__name__}: {exc}",
+            )
+        ]
+
+
 def run_downloads(
     text: str,
     *,
@@ -832,16 +1130,16 @@ def run_downloads(
     headless: bool = True,
     emit: Callable[[str], None] = lambda _msg: None,
 ) -> tuple[RunResult | None, AppError | None]:
-    """编排：提取链接 → 启动/复用 Chrome → 串行逐条下载 → 汇总。
+    """编排：提取链接 → 启动/复用 Chrome → 串行逐条下载（抖音 CDP 嗅探 / B 站 API+cookie）→ 汇总。
 
     返回 (结果, 错误)：入口级错误（无链接、Chrome 启动失败）时结果可能为 None 或已含 skipped。
     """
     extracted = extract_links(text)
     result = RunResult(records=[], skipped=extracted.skipped)
 
-    if not extracted.douyin:
-        code = "no_douyin_url" if extracted.skipped else "no_url"
-        return (result if extracted.skipped else None), AppError(code, ERROR_MESSAGES[code])
+    if not extracted.douyin and not extracted.bilibili:
+        code = "no_douyin_url" if result.skipped else "no_url"
+        return (result if result.skipped else None), AppError(code, ERROR_MESSAGES[code])
 
     try:
         ensure_chrome_running(
@@ -858,7 +1156,7 @@ def run_downloads(
     for index, url in enumerate(extracted.douyin, start=1):
         emit(f"[*] ({index}/{total}) {url}")
         try:
-            tab_ws_url = open_douyin_tab(resolve_video_url(url), port)
+            tab_ws_url = open_tab(resolve_video_url(url), port, "douyin.com")
         except AppError as exc:
             result.records.append(
                 DownloadRecord(
@@ -885,6 +1183,50 @@ def run_downloads(
         result.records.append(
             download_one(url, output_dir=output_dir, port=port, tab_ws_url=tab_ws_url, emit=emit)
         )
+
+    # B 站队列：登录门（SESSDATA 校验）→ 串行 API 下载（复用同一 Chrome profile 的 cookie）
+    if extracted.bilibili:
+        bili_cookies: dict[str, str] = {}
+        try:
+            # headed 模式下打开 bilibili.com 供人工登录；headless 下仅作为 cookie 读取的 page target
+            open_tab("https://www.bilibili.com", port, "bilibili.com")
+            bili_cookies = cdp_get_cookies(port, "https://www.bilibili.com")
+        except Exception as exc:
+            for url in extracted.bilibili:
+                result.records.append(
+                    DownloadRecord(
+                        input_url=url,
+                        ok=False,
+                        error_code="chrome_launch_failed",
+                        error_message=ERROR_MESSAGES["chrome_launch_failed"],
+                        error_detail=f"{type(exc).__name__}: {exc}",
+                    )
+                )
+
+        if bili_cookies and "SESSDATA" not in bili_cookies:
+            if not headless:
+                emit("[*] B 站未登录：已在 Chrome 窗口打开 bilibili.com，请完成登录后重跑。")
+            for url in extracted.bilibili:
+                result.records.append(
+                    DownloadRecord(
+                        input_url=url,
+                        ok=False,
+                        error_code="bilibili_not_logged_in",
+                        error_message=ERROR_MESSAGES["bilibili_not_logged_in"],
+                    )
+                )
+            bili_cookies = {}
+
+        if bili_cookies:
+            cookie_header = "; ".join(f"{name}={value}" for name, value in bili_cookies.items())
+            total_bili = len(extracted.bilibili)
+            for index, url in enumerate(extracted.bilibili, start=1):
+                emit(f"[*] (B站 {index}/{total_bili}) {url}")
+                result.records.extend(
+                    download_bilibili_one(
+                        url, cookie_header=cookie_header, output_dir=output_dir, emit=emit
+                    )
+                )
     return result, None
 
 
@@ -933,10 +1275,11 @@ def collect_text(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description="从文本中提取抖音视频链接并下载（非抖音链接跳过；多链接串行逐个处理）",
+        description="从文本中提取抖音/B 站视频链接并下载（按域名自动分流；不支持的链接跳过；多链接串行逐个处理）",
         epilog=(
             "示例：\n"
             f"  uv run {PROG}.py \"8.74 复制打开抖音 https://v.douyin.com/EBgtkB68340/\"\n"
+            f"  uv run {PROG}.py \"BV1B6YR6gEyd 或 https://b23.tv/ApmE1Nd\"\n"
             f"  Get-Content 文案.txt -Raw | uv run {PROG}.py --json\n"
             f"  uv run {PROG}.py schema"
         ),
@@ -945,7 +1288,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "text",
         nargs="*",
-        help="含抖音链接的文本（多段以换行拼接；缺省且 stdin 非 TTY 时读 stdin，'-' 显式表示 stdin）",
+        help="含抖音/B 站链接或裸 BV 号的文本（多段以换行拼接；缺省且 stdin 非 TTY 时读 stdin，'-' 显式表示 stdin）",
     )
     parser.add_argument("--json", action="store_true", help="输出 JSON 包络（stdout 仅一个 JSON 对象）")
     parser.add_argument("--schema", action="store_true", help="仅输出 CLI 契约 JSON 并退出")
@@ -973,7 +1316,7 @@ def render_text(result: RunResult, output_dir: str, headless: bool = True) -> No
             if record.error_detail:
                 print(f"       详情: {record.error_detail}")
     for skipped in result.skipped:
-        print(f"[SKIP] {skipped.url}（非抖音链接）")
+        print(f"[SKIP] {skipped.url}（不支持的链接）")
     print(
         f"汇总: 共 {len(result.records)} 条，成功 {result.succeeded}，失败 {result.failed}，"
         f"跳过 {len(result.skipped)}；下载目录 {output_dir}"
