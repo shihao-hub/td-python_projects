@@ -6,13 +6,13 @@
 
 | 项 | 值 |
 |---|---|
-| 打包日期 | 2026-10-01 |
+| 打包日期 | 2026-10-01（v2.1.0）；2026-10-02 重建至 v2.3.0 |
 | Nuitka | 4.2.2 |
 | 编译解释器 | Python 3.13（uv 管理，脚本 PEP 723 环境隔离） |
 | C 编译器 | MSVC cl 14.3（VS 2022 Build Tools，`D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`） |
 | 缓存 | clcache（Nuitka 自动使用，二次编译大幅加速） |
-| 入口 | `douyin_dl.py`（VERSION 2.1.0，唯一第三方依赖 `websocket-client>=1.8`） |
-| 产物 | `dist\douyin_dl.exe`，onefile 单文件约 6.8 MB |
+| 入口 | `douyin_dl.py`（VERSION 2.3.0，唯一第三方依赖 `websocket-client>=1.8`） |
+| 产物 | `dist\douyin_dl.exe`，onefile 单文件约 6.9 MB |
 
 ## 2. 构建方式（固化脚本）
 

@@ -4,8 +4,8 @@
 
 ## 工作原理
 
-1. **持久化浏览器会话**：通过独立专用 Profile 运行 Chrome（**默认无头后台，不弹窗**），登录状态与 Cookie 永久保留，不污染日常浏览器。
-2. **抖音 — 底层网络流嗅探**：通过 CDP 连接（默认端口 9222），在网页视频播放时从浏览器底层资源通道（`<video>` 元素与 `performance.getEntriesByType('resource')`）截获无水印高清 MP4 CDN 直链。
+1. **持久化浏览器会话**：通过独立专用 Profile 运行 Chrome（**默认 `--headless=new`，屏幕上零痕迹**——无窗口、无任务栏图标），登录状态与 Cookie 永久保留，不污染日常浏览器。被抖音拦截时自动回退 `background` 模式（真 Chrome + 窗口移到屏幕外）。
+2. **抖音 — 底层网络流嗅探**：通过 CDP 连接（默认端口 9222），在网页视频播放时从浏览器底层资源通道（`<video>` 元素与 `performance.getEntriesByType('resource')`）截获无水印高清 MP4 CDN 直链。抖音是 DASH 音视频分离，`media-video-*` 与 `media-audio-*` 两条流分别截获后经 `ffmpeg -c copy` 合并。
 3. **抖音 — 免签名免反爬**：不做 a_bogus / msToken 签名逆向，直接复用真实浏览器的播放鉴权与 Cookie。
 4. **B 站 — API + 登录态**：直接调 B 站公开 web API（view / playurl，免签名）拿 DASH 流地址，登录态经 CDP 从同一 Chrome Profile 读取（含 HttpOnly 的 SESSDATA），清晰度跟随账号权益；DASH 音视频分离流经 `ffmpeg -c copy` 无损合并。
 5. **自动落盘**：默认保存到 `~/Downloads`，同名文件自动加 `_1`、`_2` 后缀，不覆盖既有文件。
@@ -98,7 +98,9 @@ JSON 包络（仓库统一约定）：
 | `--debug-port` | `9222` | Chrome CDP 调试端口 |
 | `--profile-dir` | `%APPDATA%\language_projects\douyin_downloader\chrome-profile` | Chrome 专用 Profile |
 | `--chrome` | `C:\Program Files\Google\Chrome\Application\chrome.exe` | Chrome 可执行文件 |
-| `--headed` | 关 | 以有头窗口模式运行 Chrome（默认无头后台；用于人工完成验证滑块） |
+| `--headed` | 关 | 前台可见窗口模式（人工完成验证滑块 / 首次登录 B 站） |
+| `--headless[=MODE]` | `new` | 启动模式：`new`=Chrome 新版无头（默认，屏幕零痕迹）、`old`=旧无头（已被抖音风控识别）、`background`=真 Chrome + 窗口移到屏幕外 |
+| `--close-browser` | 关 | 关闭常驻的自动化 Chrome 实例后退出 |
 | `--json` / `--schema` | 关 | 机器输出 / 契约导出 |
 
 ## 打包为 exe（Nuitka）
@@ -134,12 +136,29 @@ uv run scripts\build_exe.py --dir        # standalone 文件夹版（启动更�
 - **B 站链路（API + cookie 混合）**：`resolve_bilibili_url` 解析短链/裸 BV 号 → `fetch_bili_view`（标题 + 多 P pages）→ `fetch_bili_playurl`（DASH 流，qn=127 按登录权益下发）→ `pick_bili_streams`（video 取 id 最大档、audio 取首项；老视频无 DASH 时走 durl 单流兼容分支）→ 双流下载（必带 `Referer: https://www.bilibili.com/`，否则 CDN 403）→ `ffmpeg -c copy` 合并。登录态经 CDP `Network.getCookies` 读取（可读 HttpOnly cookie），与抖音共用同一 Profile。
 - **不提供 MCP**：本工具是本地一次性下载动作，没有跨会话的状态查询需求，按《CLI 工具开发标准》§5.5 以 `interface: "cli"` 声明契约（`schema` 导出的是 CLI 契约，不是 MCP 工具目录）。
 
+### 启动模式与「不打扰用户」
+
+| 模式 | 触发 | 行为 |
+|---|---|---|
+| `headless-new`（默认） | 不带参数 / `--headless=new` | Chrome 新版无头。实测可过抖音风控，屏幕上**无窗口、无任务栏图标** |
+| `background`（回退） | `--headless=background` 或默认模式被拦时自动回退 | 真 Chrome + `--window-position=-32000,-32000`（移到屏幕外）+ `--mute-audio` |
+| `headed` | `--headed` | 前台可见窗口，供人工过滑块 / 登录 B 站 |
+| `headless-old` | `--headless=old` | 旧无头。**已被抖音风控识别**，保留仅为对照 |
+
+`background` 模式为什么用「移到屏幕外」而不是「压在窗口最底层」：实测把窗口压到 z-order 最底（`HWND_BOTTOM`）或设置 `WS_EX_NOACTIVATE` 后，窗口会被判定为不可见/不可激活，**抖音播放器因此不加载视频流**（`stream_not_found`）；`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`、`--disable-features=CalculateNativeWinOcclusion` 三个 flag 也救不回来。移到屏幕外不产生遮挡，Chrome 照常渲染，流能正常抓到，同时用户屏幕上完全看不到。
+
+### 抖音音视频合并
+
+抖音是 **DASH 音视频分离**：`media-video-*` 与 `media-audio-*` 是两条独立流。`capture_stream_urls()` 扫 `performance` 资源记录后按 `media-audio` 分区成对取流（两者同属一份 manifest，时间轴天然对齐），下载后 `ffmpeg -c copy` 合并。`<video>` 元素 src 仅作视频兜底——实测它常指向另一路 rendition，优先用它会与音频失步。
+
+> 历史 bug：早期版本在抓流时用 `!n.includes('media-audio')` 主动滤掉音频，且命中 `<video>` 元素就提前 return，导致**抖音视频永远无声**。修复时同时加了 `probe_has_audio()`：若抓到的流本身已含音轨（走 `<video>` 兜底时可能发生），直接落盘而不再合并，避免出双音轨。
+
 ## 已知限制
 
-1. **抖音风控可能返回「验证中间页」**：此时该条失败并给出 `stream_not_found`。默认无头模式没有窗口可操作，用 `--headed` 重跑，在弹出的 Chrome 窗口内人工完成验证滑块后再重跑。工具不会伪造成功。
+1. **抖音风控可能返回「验证中间页」**：此时该条失败并给出 `stream_not_found`。默认 `headless=new` 会**自动回退 `background`（真 Chrome）重试一遍**；若两者都没拿到流，用 `--headed` 重跑，在弹出的 Chrome 窗口内人工完成验证滑块后再重跑。工具不会伪造成功。
 2. **B 站需要登录态**：未登录（Profile 无 SESSDATA）时 B 站链接整批按 `bilibili_not_logged_in` 失败；SESSDATA 过期后同样处理，重新 `--headed` 登录一次即可。登录态质量决定清晰度档位（工具取服务端按权益下发的最高档）。
-3. **B 站合并依赖 ffmpeg**：本机 PATH 需有 `ffmpeg`（合并用 `-c copy` 无重编码，秒级完成）；缺失时 DASH 视频按 `ffmpeg_merge_failed` 失败，临时流会自动清理。
-4. **无头 Chrome 进程驻留后台**：运行结束后 Chrome 实例不退出（复用登录态与实例，后续运行秒连），属设计行为。结束方式：`--headed` 运行时手动关窗，或任务管理器结束对应 Profile 的 `chrome.exe`。
+3. **合并依赖 ffmpeg**：抖音 DASH 音视频流与 B 站 DASH 流都靠 `ffmpeg -c copy` 合并（无重编码，秒级完成）；本机 PATH 需有 `ffmpeg`，缺失时按 `ffmpeg_merge_failed` 失败，临时流会自动清理。抖音若始终抓不到音频流，会降级为无声视频并在结果里标 `audio: "missing"`（不伪造成功）。
+4. **Chrome 进程驻留后台**：运行结束后 Chrome 实例不退出（复用登录态与实例，后续运行秒连），属设计行为。结束方式：`--close-browser`（推荐），或任务管理器结束对应 Profile 的 `chrome.exe`。
 5. **短链解析依赖网络**：解析失败的抖音/B 站短链按 `invalid_url` 如实失败（不静默丢弃）。
 6. **抓取依赖 Chrome 与 CDP**：Profile 首次使用或长时间未用后可能需要重新登录/验证（抖音验证滑块、B 站登录各一次）。
 7. **需要 Chrome 已安装**在 `--chrome` 指定的路径。

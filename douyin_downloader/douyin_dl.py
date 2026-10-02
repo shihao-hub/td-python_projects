@@ -7,9 +7,15 @@
 用法：
     uv run douyin_dl.py "<含抖音或 B 站链接的文本>" [--json] [--output-dir DIR] [--headed]
     Get-Content 文案.txt -Raw | uv run douyin_dl.py --json
-    uv run douyin_dl.py schema          # 导出 CLI 契约 JSON（零业务 I/O）
+    uv run douyin_dl.py --close-browser     # 关掉常驻的自动化 Chrome
+    uv run douyin_dl.py schema              # 导出 CLI 契约 JSON（零业务 I/O）
 
-抖音：默认无头 Chrome 经 CDP 嗅探无水印视频流直链后下载；--headed 切换有头窗口（人工完成验证用）。
+抖音：默认 headless-new 模式——Chrome 新版无头，实测可过抖音风控，屏幕上零痕迹（无窗口、
+     无任务栏图标）。若某条 stream_not_found，整批自动改用 background 模式（真 Chrome +
+     窗口移到屏幕外 + 静音，不抢焦点也不外放声音）重试一遍。
+     抖音为 DASH 音视频分离流，视频流与音频流分别下载后经 ffmpeg -c copy 合并；未捕获到
+     音频流时降级为无声视频并在结果里标记 audio=missing。--headed 切前台可见窗口（人工过
+     验证滑块）；--headless=old 为旧无头，已被抖音风控识别。
 B 站：API + 浏览器登录态路线——复用同一 Chrome profile 的 cookie（SESSDATA），
      未登录时按 bilibili_not_logged_in 失败（首次先 --headed 登录一次 bilibili.com）；
      DASH 音视频分离流经 ffmpeg -c copy 合并，需本机已安装 ffmpeg。
@@ -40,7 +46,7 @@ from typing import Any, Callable, Iterable
 
 import websocket
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 PROG = "douyin_dl"
 # 项目目录名（monorepo 目录名）用下划线，与 CLI 程序名 PROG 区分
 PROJECT_DIR_NAME = "douyin_downloader"
@@ -49,6 +55,15 @@ PROJECT_DIR_NAME = "douyin_downloader"
 
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 DEBUG_PORT = 9222
+
+# Chrome 启动模式。background 为默认：真 Chrome（非无头，规避抖音风控），但窗口
+# 窗口移到屏幕外，既不抢焦点也不外放声音。headless 两档仅作备选显式开启。
+MODE_BACKGROUND = "background"
+MODE_HEADED = "headed"
+MODE_HEADLESS_OLD = "headless-old"
+MODE_HEADLESS_NEW = "headless-new"
+LAUNCH_MODES = (MODE_BACKGROUND, MODE_HEADED, MODE_HEADLESS_OLD, MODE_HEADLESS_NEW)
+HEADLESS_MODES = (MODE_HEADLESS_OLD, MODE_HEADLESS_NEW)
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -113,6 +128,14 @@ def _schema_response_property() -> dict[str, Any]:
             "title": {"type": "string", "description": "页面标题清洗后的文件名主干"},
             "path": {"type": "string", "description": "落盘绝对路径；失败时为空串"},
             "bytes": {"type": "integer", "minimum": 0},
+            "audio": {
+                "type": "string",
+                "enum": ["merged", "included", "missing", "unknown"],
+                "description": (
+                    "音轨状态（仅成功记录带此字段）：merged=视频+音频经 ffmpeg 合并；"
+                    "included=单条流自带音轨无需合并；missing=未捕获到音频流，已降级为无声视频"
+                ),
+            },
             "error": _obj(
                 {
                     "code": {"type": "string", "enum": sorted(ERROR_MESSAGES)},
@@ -195,7 +218,14 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                         "debug_port": {"type": "integer", "default": resolved["debug_port"], "description": "Chrome CDP 端口"},
                         "profile_dir": {"type": "string", "default": "", "description": "Chrome 专用 Profile 目录，空表示使用默认数据目录"},
                         "chrome": {"type": "string", "default": resolved["chrome"], "description": "Chrome 可执行文件路径"},
-                        "headed": {"type": "boolean", "default": False, "description": "以有头窗口模式运行 Chrome（默认无头后台；用于人工完成验证滑块）"},
+                        "headed": {"type": "boolean", "default": False, "description": "前台可见窗口模式（人工完成验证滑块 / 首次登录 B 站）"},
+                        "headless": {
+                            "type": "string",
+                            "enum": ["new", "old", "background"],
+                            "default": "new",
+                            "description": "启动模式：new=Chrome 新版无头（默认，屏幕零痕迹）、old=旧无头（已被抖音风控识别，会 stream_not_found）、background=真 Chrome + 窗口移到屏幕外",
+                        },
+                        "close_browser": {"type": "boolean", "default": False, "description": "关闭常驻的自动化 Chrome 实例后退出（不处理任何链接）"},
                     },
                 },
                 "output": {
@@ -211,19 +241,25 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                 },
                 "constraints": [
                     "处理串行执行，复用同一个 Chrome 与标签页",
-                    "Chrome 默认无头后台运行（不弹窗），--headed 切换有头窗口",
+                    "Chrome 默认以 headless-new 模式启动（Chrome 新版无头，实测可过抖音风控且屏幕上无窗口、无任务栏图标）",
+                    "headless-new 下某条 stream_not_found 时，整批抖音链接会自动改用 background 模式重试一遍；旧无头 --headless=old 是显式选择，不自动回退",
+                    "background 模式为真 Chrome + 窗口移到屏幕外 + 静音，因此屏幕上看不到也不外放声音；--headed 为前台可见窗口（人工过验证滑块 / 登录 B 站）",
                     "单条失败不中断整批，结果中逐条给出结构化错误",
                     "需要人工完成抖音验证滑块时该条失败，用 --headed 重跑后人工处理",
+                    "抖音为 DASH 音视频分离流，下载后经 ffmpeg -c copy 合并；未捕获到音频流时降级为无声视频并在 audio 字段标记 missing",
                     "B 站链接复用同一 Chrome profile 的登录态（SESSDATA），未登录时该批按 bilibili_not_logged_in 失败；首次使用先 --headed 登录一次 bilibili.com",
                     "B 站视频为 DASH 音视频分离流，下载后经 ffmpeg -c copy 合并，需本机已安装 ffmpeg",
                     "裸 BV 号（BV+10 位字母数字）与 b23.tv 短链、bilibili.com 链接等效支持",
+                    "Chrome 实例运行结束后常驻不退出（复用登录态，后续运行秒连）；用 --close-browser 显式收尾",
                 ],
             }
         ],
         "side_effects": {
             "filesystem": [resolved["output_dir"]],
-            "process": ["Chrome（独立 Profile + CDP 调试端口，默认无头后台）"],
-            "network": ["抖音页面与 douyinvod.com 视频流", "B 站 API（api.bilibili.com）与 bilivideo CDN 视频流"],
+            "process": [
+                "Chrome（独立 Profile + CDP 调试端口，默认 headless-new；回退或显式指定时为 background：真浏览器 + 窗口移到屏幕外）"
+            ],
+            "network": ["抖音页面与 douyinvod.com 音视频流", "B 站 API（api.bilibili.com）与 bilivideo CDN 音视频流"],
         },
         "not_provided": {
             "mcp": "本工具为本地一次性下载动作，无跨会话状态查询需求，按标准 §5.5 以 interface=cli 声明契约",
@@ -286,29 +322,32 @@ def chrome_ready(port: int) -> bool:
 LAUNCH_MODE_MARKER = "launch-mode.txt"
 
 
-def _write_launch_mode_marker(headless: bool) -> None:
+def _write_launch_mode_marker(mode: str) -> None:
     """记录本工具最近一次拉起的 Chrome 模式（无头时 UA 指纹已被覆盖，标记文件更可靠）。"""
     try:
         with open(os.path.join(data_dir(), LAUNCH_MODE_MARKER), "w", encoding="utf-8") as fh:
-            fh.write("headless" if headless else "headed")
+            fh.write(mode)
     except OSError:
         pass
 
 
-def chrome_current_headless(port: int) -> bool:
-    """判定占用端口的 Chrome 是否无头：UA 含 HeadlessChrome 直接判定，否则读启动标记。"""
+def chrome_current_mode(port: int) -> str:
+    """判定占用端口的 Chrome 处于哪种启动模式：优先读启动标记，UA 仅作兜底判据。"""
+    try:
+        with open(os.path.join(data_dir(), LAUNCH_MODE_MARKER), "r", encoding="utf-8") as fh:
+            marker = fh.read().strip()
+        if marker in LAUNCH_MODES:
+            return marker
+    except OSError:
+        pass
     try:
         with urllib.request.urlopen(cdpx_url(port, "/json/version"), timeout=2) as resp:
             info = json.load(resp)
         if "HeadlessChrome" in (info.get("User-Agent") or ""):
-            return True
+            return MODE_HEADLESS_OLD
     except Exception:
         pass
-    try:
-        with open(os.path.join(data_dir(), LAUNCH_MODE_MARKER), "r", encoding="utf-8") as fh:
-            return fh.read().strip() == "headless"
-    except OSError:
-        return False
+    return MODE_HEADED
 
 
 def browser_close(port: int = DEBUG_PORT, timeout: float = 10.0) -> bool:
@@ -384,9 +423,11 @@ def start_chrome(
     profile_dir: str | None = None,
     port: int = DEBUG_PORT,
     download_dir: str | None = None,
-    headless: bool = True,
+    mode: str = MODE_BACKGROUND,
 ) -> int:
-    """启动独立的 Chrome 自动化实例（持久化 Profile + CDP 调试端口；默认无头后台）。
+    """启动独立的 Chrome 自动化实例（持久化 Profile + CDP 调试端口）。
+
+    返回浏览器进程 PID。
 
     sh-ai-todo: 改为子进程执行 start_chrome 函数，这个函数的作用就是启动这个 start_chrome.ps1 脚本，但是我希望这个脚本内容是嵌在 start_chrome 函数里的
 
@@ -402,7 +443,7 @@ def start_chrome(
     os.makedirs(profile, exist_ok=True)
     _seed_profile_preferences(profile, downloads)
 
-    ps1 = _build_embedded_ps1(chrome_path, profile, port, url, headless)
+    ps1 = _build_embedded_ps1(chrome_path, profile, port, url, mode)
     encoded = base64.b64encode(ps1.encode("utf-16-le")).decode("ascii")
     proc = _run_hidden(
         [
@@ -423,11 +464,17 @@ def start_chrome(
     match = re.search(r"ProcessId:\s*(\d+)", output)
     if not match:
         raise AppError("chrome_launch_failed", "未能解析 Chrome 进程号", output[:500])
-    _write_launch_mode_marker(headless)
+    _write_launch_mode_marker(mode)
     return int(match.group(1))
 
 
-def _build_embedded_ps1(chrome_path: str, profile_dir: str, port: int, url: str, headless: bool = True) -> str:
+def _build_embedded_ps1(
+    chrome_path: str,
+    profile_dir: str,
+    port: int,
+    url: str,
+    mode: str = MODE_BACKGROUND,
+) -> str:
     """生成内嵌 PowerShell 脚本（单引号字符串，内部单引号需翻倍转义）。"""
 
     def q(value: str) -> str:
@@ -438,7 +485,7 @@ def _build_embedded_ps1(chrome_path: str, profile_dir: str, port: int, url: str,
         "$profile = " + q(profile_dir) + "\n"
         "$Url = " + q(url) + "\n"
         f"$port = {port}\n"
-        "$headless = " + ("$true" if headless else "$false") + "\n"
+        f"$mode = {q(mode)}\n"
         "\n"
         "# Ensure preferences (Downloads folder and developer mode)\n"
         '$prefDir = Join-Path $profile "Default"\n'
@@ -446,17 +493,28 @@ def _build_embedded_ps1(chrome_path: str, profile_dir: str, port: int, url: str,
         "    New-Item -ItemType Directory -Path $prefDir -Force | Out-Null\n"
         "}\n"
         "\n"
-        "# Headless: new headless mode + fingerprint mitigation (real-version UA, autoplay, desktop size)\n"
         "$flags = ''\n"
-        "if ($headless) {\n"
+        "if ($mode -eq 'headless-old' -or $mode -eq 'headless-new') {\n"
+        "    # 显式无头：旧无头已被抖音风控识别（stream_not_found），仅作备选保留\n"
         "    try { $ver = (Get-Item $chrome).VersionInfo.ProductVersion } catch { $ver = '' }\n"
-        "    $flags = ' --headless --mute-audio --autoplay-policy=no-user-gesture-required "
+        "    $hl = if ($mode -eq 'headless-new') { ' --headless=new' } else { ' --headless' }\n"
+        "    $flags = $hl + ' --mute-audio --autoplay-policy=no-user-gesture-required "
         "--window-size=1380,850 --disable-blink-features=AutomationControlled'\n"
         "    if ($ver) {\n"
         "        $UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/' + $ver + ' Safari/537.36'\n"
         "        $flags = $flags + ' --user-agent=\"' + $UA + '\"'\n"
         "    }\n"
+        "}\n"
+        "if ($mode -eq 'background') {\n"
+        "    # 真 Chrome（非无头，规避风控）+ 静音 + 移到屏幕外 + 禁用遮挡节流。\n"
+        "    # 不用 HWND_BOTTOM/WS_EX_NOACTIVATE：实测两者都会让抖音播放器不加载视频流\n"
+        "    # （窗口被判定为不可见 → 页面不放流），而移到屏幕外不产生遮挡，Chrome 照常渲染。\n"
+        "    $flags = ' --mute-audio --autoplay-policy=no-user-gesture-required'\n"
+        "    $flags = $flags + ' --window-position=-32000,-32000 --window-size=800,600'\n"
+        "    $flags = $flags + ' --disable-backgrounding-occluded-windows'"
+        " + ' --disable-renderer-backgrounding'"
+        " + ' --disable-features=CalculateNativeWinOcclusion'\n"
         "}\n"
         "\n"
         '$cmdline = "`"$chrome`" --user-data-dir=`"$profile`" --no-first-run '
@@ -466,6 +524,8 @@ def _build_embedded_ps1(chrome_path: str, profile_dir: str, port: int, url: str,
         "$res = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
         "@{ CommandLine = $cmdline }\n"
         'Write-Output ("ReturnCode: " + $res.ReturnValue + ", ProcessId: " + $res.ProcessId)\n'
+        "\n"
+        "# background 模式：窗口已在屏幕外，无需再改 z-order/激活属性（那反而会掐断视频流）\n"
     )
 
 
@@ -475,35 +535,34 @@ def ensure_chrome_running(
     chrome_path: str = CHROME_PATH,
     profile_dir: str | None = None,
     download_dir: str | None = None,
-    headless: bool = True,
-) -> bool:
+    mode: str = MODE_BACKGROUND,
+) -> int:
+    """确保端口上跑着目标模式的 Chrome，返回浏览器进程 PID。
+
+    已有实例模式一致时返回 0（无需重新拉起）。
+    """
     if chrome_ready(port):
-        if chrome_current_headless(port) == headless:
-            return True
+        if chrome_current_mode(port) == mode:
+            return 0
         print("[*] Chrome running in a different mode; closing it to relaunch...", file=sys.stderr)
         browser_close(port)
         wait_chrome_exit(port)
 
-    print(
-        "[*] Launching Chrome (headless background)..."
-        if headless
-        else "[*] Launching Chrome window (headed)...",
-        file=sys.stderr,
-    )
-    start_chrome(
+    print(f"[*] Launching Chrome (mode: {mode})...", file=sys.stderr)
+    pid = start_chrome(
         "https://www.douyin.com",
         chrome_path=chrome_path,
         profile_dir=profile_dir,
         port=port,
         download_dir=download_dir,
-        headless=headless,
+        mode=mode,
     )
 
     for _ in range(15):
         time.sleep(1)
         if chrome_ready(port):
             print(f"[+] Chrome CDP ready on port {port}.", file=sys.stderr)
-            return True
+            return pid
     raise AppError("chrome_launch_failed", f"等待 Chrome CDP 端口 {port} 超时")
 
 
@@ -657,6 +716,35 @@ def merge_av_streams(video_path: str, audio_path: str, output_path: str) -> bool
     return proc.returncode == 0
 
 
+def probe_has_audio(media_path: str) -> bool:
+    """探测媒体文件是否自带音频流（决定要不要再合并一遍）。
+
+    ffprobe 缺失或异常时返回 False：走正常合并路径，行为与历史一致。
+    """
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index",
+                "-of",
+                "csv=p=0",
+                media_path,
+            ],
+            capture_output=True,
+            text=True,
+            creationflags=flags,
+        )
+    except OSError:
+        return False
+    return proc.returncode == 0 and bool((proc.stdout or "").strip())
+
+
 def cleanup_files(*paths: str) -> None:
     """尽力删除指定文件（临时流清理用），不存在或删不掉都静默。"""
     for path in paths:
@@ -700,6 +788,7 @@ class DownloadRecord:
     title: str = ""
     path: str = ""
     bytes: int = 0
+    audio: str = ""
     error_code: str = ""
     error_message: str = ""
     error_detail: str = ""
@@ -714,7 +803,9 @@ class DownloadRecord:
             "path": self.path,
             "bytes": self.bytes,
         }
-        if not self.ok:
+        if self.ok:
+            payload["audio"] = self.audio or "unknown"
+        else:
             payload["error"] = {
                 "code": self.error_code,
                 "message": self.error_message,
@@ -920,34 +1011,48 @@ def clean_title(title: str, fallback: str) -> str:
     return cleaned or fallback
 
 
-def capture_stream_url(ws_url: str, attempts: int = 12, interval: float = 1.0) -> str | None:
-    """在页面中轮询捕获视频流地址（优先 video 元素，其次 CDN 资源记录）。"""
-    for _ in range(attempts):
-        srcs = (
-            eval_cdp(
-                ws_url,
-                "Array.from(document.querySelectorAll('video'))"
-                ".map(v => v.currentSrc || v.src).filter(Boolean)",
-            )
-            or []
-        )
-        for src in srcs:
-            if src.startswith("http") and not src.startswith("blob:"):
-                return src
+_JS_DOUYIN_RESOURCES = (
+    "performance.getEntriesByType('resource').map(r => r.name)"
+    ".filter(n => n.includes('.douyinvod.com'))"
+)
 
-        urls = (
-            eval_cdp(
-                ws_url,
-                "performance.getEntriesByType('resource').map(r => r.name)"
-                ".filter(n => n.includes('.douyinvod.com') && !n.includes('media-audio'))",
-            )
-            or []
-        )
-        if urls:
-            return urls[-1]
+_JS_VIDEO_SRC = (
+    "Array.from(document.querySelectorAll('video')).map(v => v.currentSrc || v.src).filter(Boolean)"
+)
+
+
+def capture_stream_urls(ws_url: str, attempts: int = 12, interval: float = 1.0) -> tuple[str, str]:
+    """在页面中轮询捕获 (视频流地址, 音频流地址)。
+
+    抖音是 DASH 音视频分离：`media-video-*` 与 `media-audio-*` 是两条独立流，只取其一
+    必然残缺（历史 bug：这里曾用 `!n.includes('media-audio')` 主动滤掉音频，导致抖音
+    视频永远无声）。两者同属一份 manifest，时间轴天然对齐，下载后经 ffmpeg 合并。
+
+    优先级：资源记录里的 DASH 成对流 > `<video>` 元素 src（仅作视频兜底——实测它常指向
+    另一路 rendition，与音频不同源，混用有失步风险）。音频缺失不算失败，由调用方降级处理。
+    """
+    video_url = ""
+    audio_url = ""
+    for _ in range(attempts):
+        resources = eval_cdp(ws_url, _JS_DOUYIN_RESOURCES) or []
+        audio = [u for u in resources if "media-audio" in u]
+        video = [u for u in resources if "media-audio" not in u and "/video/tos/" in u]
+        if video:
+            video_url = video[-1]
+        if audio:
+            audio_url = audio[-1]
+        if video_url and audio_url:
+            return video_url, audio_url
+
+        if not video_url:
+            srcs = eval_cdp(ws_url, _JS_VIDEO_SRC) or []
+            for src in srcs:
+                if src.startswith("http") and not src.startswith("blob:"):
+                    video_url = src
+                    break
 
         time.sleep(interval)
-    return None
+    return video_url, audio_url
 
 
 def download_one(
@@ -984,20 +1089,47 @@ def download_one(
             time.sleep(3)
 
         title = eval_cdp(tab_ws_url, "document.title") or ""
-        stream_url = capture_stream_url(tab_ws_url)
-        if not stream_url:
+        video_stream, audio_stream = capture_stream_urls(tab_ws_url)
+        if not video_stream:
             raise AppError("stream_not_found", ERROR_MESSAGES["stream_not_found"])
 
         stem = clean_title(str(title), f"douyin_{record.video_id}")
         output_path = unique_path(output_dir, stem)
-        emit(f"[+] Found stream URL: {stream_url[:90]}...")
-        saved_path, size = download_stream(stream_url, output_path)
+        emit(f"[+] Video stream: {video_stream[:90]}...")
+        if audio_stream:
+            emit(f"[+] Audio stream: {audio_stream[:90]}...")
+        else:
+            emit("[!] 未捕获到音频流，将降级为无声视频（音画完整性无法保证）。")
 
+        video_tmp = output_path + ".video.mp4"
+        audio_tmp = output_path + ".audio.m4a"
+        try:
+            saved_path, _ = download_stream(video_stream, video_tmp)
+            if probe_has_audio(video_tmp):
+                # 兜底源本身已是合流，直接落盘：再合并一次会出双音轨
+                os.replace(video_tmp, output_path)
+                record.audio = "included"
+            elif audio_stream:
+                emit("[*] Downloading audio stream...")
+                download_stream(audio_stream, audio_tmp)
+                emit("[*] Merging with ffmpeg...")
+                if not merge_av_streams(video_tmp, audio_tmp, output_path):
+                    raise AppError("ffmpeg_merge_failed", ERROR_MESSAGES["ffmpeg_merge_failed"])
+                record.audio = "merged"
+            else:
+                os.replace(video_tmp, output_path)
+                record.audio = "missing"
+        except Exception:
+            cleanup_files(video_tmp, audio_tmp, output_path)
+            raise
+        cleanup_files(video_tmp, audio_tmp)
+
+        size = os.path.getsize(output_path)
         record.ok = True
         record.title = stem
-        record.path = saved_path
+        record.path = output_path
         record.bytes = size
-        emit(f"[+] Download complete: {saved_path} ({size} bytes)")
+        emit(f"[+] Download complete: {output_path} ({size} bytes, audio={record.audio})")
     except AppError as exc:
         record.error_code = exc.code
         record.error_message = exc.message
@@ -1076,12 +1208,14 @@ def download_bilibili_one(
                     emit(f"[*] Merging with ffmpeg (P{page_no})...")
                     if not merge_av_streams(video_tmp, audio_tmp, output_path):
                         raise AppError("ffmpeg_merge_failed", ERROR_MESSAGES["ffmpeg_merge_failed"])
+                    record.audio = "merged"
                     cleanup_files(video_tmp, audio_tmp)
                 else:
                     # durl 老视频单流直链（FLV/MP4），无需合并
                     suffix = ".flv" if ".flv" in video_url.split("?")[0] else ".mp4"
                     output_path = unique_path(output_dir, stem, suffix)
                     download_stream(video_url, output_path, bili_headers(cookie_header))
+                    record.audio = "included"
 
                 record.ok = True
                 record.path = output_path
@@ -1127,7 +1261,7 @@ def run_downloads(
     port: int,
     chrome_path: str = CHROME_PATH,
     profile_dir: str | None = None,
-    headless: bool = True,
+    mode: str = MODE_BACKGROUND,
     emit: Callable[[str], None] = lambda _msg: None,
 ) -> tuple[RunResult | None, AppError | None]:
     """编排：提取链接 → 启动/复用 Chrome → 串行逐条下载（抖音 CDP 嗅探 / B 站 API+cookie）→ 汇总。
@@ -1147,42 +1281,89 @@ def run_downloads(
             chrome_path=chrome_path,
             profile_dir=profile_dir,
             download_dir=output_dir,
-            headless=headless,
+            mode=mode,
         )
     except AppError as exc:
         return result, exc
 
-    total = len(extracted.douyin)
-    for index, url in enumerate(extracted.douyin, start=1):
-        emit(f"[*] ({index}/{total}) {url}")
-        try:
-            tab_ws_url = open_tab(resolve_video_url(url), port, "douyin.com")
-        except AppError as exc:
-            result.records.append(
-                DownloadRecord(
-                    input_url=url,
-                    ok=False,
-                    error_code=exc.code,
-                    error_message=exc.message,
-                    error_detail=exc.detail,
+    def run_douyin_batch(urls: list[str], label: str = "") -> list[DownloadRecord]:
+        records: list[DownloadRecord] = []
+        for index, url in enumerate(urls, start=1):
+            emit(f"[*] {label}({index}/{len(urls)}) {url}")
+            try:
+                tab_ws_url = open_tab(resolve_video_url(url), port, "douyin.com")
+            except AppError as exc:
+                records.append(
+                    DownloadRecord(
+                        input_url=url,
+                        ok=False,
+                        error_code=exc.code,
+                        error_message=exc.message,
+                        error_detail=exc.detail,
+                    )
                 )
-            )
-            continue
-        except Exception as exc:
-            result.records.append(
-                DownloadRecord(
-                    input_url=url,
-                    ok=False,
-                    error_code="chrome_launch_failed",
-                    error_message=ERROR_MESSAGES["chrome_launch_failed"],
-                    error_detail=f"{type(exc).__name__}: {exc}",
+                continue
+            except Exception as exc:
+                records.append(
+                    DownloadRecord(
+                        input_url=url,
+                        ok=False,
+                        error_code="chrome_launch_failed",
+                        error_message=ERROR_MESSAGES["chrome_launch_failed"],
+                        error_detail=f"{type(exc).__name__}: {exc}",
+                    )
                 )
-            )
-            continue
+                continue
 
-        result.records.append(
-            download_one(url, output_dir=output_dir, port=port, tab_ws_url=tab_ws_url, emit=emit)
-        )
+            records.append(
+                download_one(
+                    url,
+                    output_dir=output_dir,
+                    port=port,
+                    tab_ws_url=tab_ws_url,
+                    emit=emit,
+                )
+            )
+        return records
+
+    result.records.extend(run_douyin_batch(extracted.douyin))
+
+    # 新版无头被拦时自动回退 background（真 Chrome）重试一遍：默认模式追求屏幕零痕迹，
+    # 但不能因此丢掉能下到的视频。旧无头是显式选择，不回退（回退会让该 flag 失去意义）。
+    if mode == MODE_HEADLESS_NEW:
+        failed_stream = [
+            r for r in result.records if not r.ok and r.error_code == "stream_not_found"
+        ]
+        if failed_stream:
+            emit(
+                f"[!] 新版无头未捕获到流（{len(failed_stream)} 条），"
+                "自动回退 background 模式（真 Chrome，窗口移到屏幕外）重试..."
+            )
+            try:
+                browser_close(port)
+                wait_chrome_exit(port)
+                ensure_chrome_running(
+                    port,
+                    chrome_path=chrome_path,
+                    profile_dir=profile_dir,
+                    download_dir=output_dir,
+                    mode=MODE_BACKGROUND,
+                )
+            except AppError as exc:
+                emit(f"[!] 回退 background 失败：{exc.message}（保留原始失败结果）")
+            else:
+                retried = run_douyin_batch(
+                    [r.input_url for r in failed_stream], label="回退 "
+                )
+                merged: list[DownloadRecord] = []
+                cursor = 0
+                for record in result.records:
+                    if not record.ok and record.error_code == "stream_not_found":
+                        merged.append(retried[cursor])
+                        cursor += 1
+                    else:
+                        merged.append(record)
+                result.records = merged
 
     # B 站队列：登录门（SESSDATA 校验）→ 串行 API 下载（复用同一 Chrome profile 的 cookie）
     if extracted.bilibili:
@@ -1204,8 +1385,10 @@ def run_downloads(
                 )
 
         if bili_cookies and "SESSDATA" not in bili_cookies:
-            if not headless:
+            if mode == MODE_HEADED:
                 emit("[*] B 站未登录：已在 Chrome 窗口打开 bilibili.com，请完成登录后重跑。")
+            elif mode == MODE_BACKGROUND:
+                emit("[*] B 站未登录：请加 --headed 重跑，在弹出的前台窗口中登录 bilibili.com。")
             for url in extracted.bilibili:
                 result.records.append(
                     DownloadRecord(
@@ -1296,20 +1479,55 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug-port", type=int, default=DEBUG_PORT, help=f"Chrome CDP 端口（默认 {DEBUG_PORT}）")
     parser.add_argument("--profile-dir", default=None, help="Chrome 专用 Profile 目录（默认项目数据目录下 chrome-profile）")
     parser.add_argument("--chrome", default=CHROME_PATH, help="Chrome 可执行文件路径")
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--headed",
         action="store_true",
-        help="以有头窗口模式运行 Chrome（默认无头后台；用于人工完成验证滑块）",
+        help="前台可见窗口模式（人工完成验证滑块 / 首次登录 B 站）",
+    )
+    mode_group.add_argument(
+        "--headless",
+        nargs="?",
+        const="new",
+        choices=["new", "old", "background"],
+        default=None,
+        help=(
+            "显式指定启动模式：new=Chrome 新版无头（默认，屏幕零痕迹）、"
+            "old=旧无头（已被抖音风控识别，会 stream_not_found）、"
+            "background=真 Chrome + 窗口移到屏幕外；省略该参数等同 new"
+        ),
+    )
+    parser.add_argument(
+        "--close-browser",
+        action="store_true",
+        help="关闭常驻的自动化 Chrome 实例后退出（不处理任何链接）",
     )
     parser.add_argument("--version", action="version", version=f"{PROG} {VERSION}")
     return parser
 
 
-def render_text(result: RunResult, output_dir: str, headless: bool = True) -> None:
+def resolve_mode(args: argparse.Namespace) -> str:
+    """CLI 参数 → 启动模式。
+
+    默认 headless-new：Chrome 新版无头，实测可过抖音风控且屏幕上零痕迹。
+    它被拦时 run_downloads 会自动回退 background（真 Chrome + 窗口移到屏幕外）重试一遍。
+    """
+    if args.headed:
+        return MODE_HEADED
+    if args.headless == "old":
+        return MODE_HEADLESS_OLD
+    if args.headless == "background":
+        return MODE_BACKGROUND
+    return MODE_HEADLESS_NEW
+
+
+def render_text(result: RunResult, output_dir: str, mode: str = MODE_BACKGROUND) -> None:
     for record in result.records:
         if record.ok:
             print(f"[OK]   {record.video_url}")
-            print(f"       文件: {record.path} ({record.bytes} bytes)")
+            print(f"       文件: {record.path} ({record.bytes} bytes, audio={record.audio})")
+            if record.audio == "missing":
+                print("       ⚠ 未捕获到音频流：该文件无声，音画完整性无法保证。")
         else:
             print(f"[FAIL] {record.input_url}")
             print(f"       原因: {record.error_code} - {record.error_message}")
@@ -1322,9 +1540,22 @@ def render_text(result: RunResult, output_dir: str, headless: bool = True) -> No
         f"跳过 {len(result.skipped)}；下载目录 {output_dir}"
     )
     if result.failed and not result.succeeded:
-        if headless:
+        if mode == MODE_HEADLESS_NEW:
             print(
-                "提示: 可能触发了抖音验证滑块：加 --headed 重跑，在弹出的 Chrome 窗口中人工完成验证。",
+                "提示: 新版无头与 background 回退都没拿到流，抖音多半在要求人工验证："
+                "加 --headed 重跑并在弹出的窗口中完成验证。",
+                file=sys.stderr,
+            )
+        elif mode == MODE_HEADLESS_OLD:
+            print(
+                "提示: 旧无头已被抖音风控识别。去掉 --headless=old 用默认模式重跑，"
+                "或加 --headed 人工完成验证。",
+                file=sys.stderr,
+            )
+        elif mode == MODE_BACKGROUND:
+            print(
+                "提示: Chrome 窗口已移到屏幕外（看不到、不抢焦点）。"
+                "若其中出现验证滑块，请加 --headed 重跑并在前台窗口内人工完成。",
                 file=sys.stderr,
             )
         else:
@@ -1348,6 +1579,20 @@ def main(argv: list[str] | None = None) -> int:
             defaults["profile_dir"] = args.profile_dir
         print(json.dumps(build_schema(defaults), ensure_ascii=False, indent=2))
         return 0
+
+    # 收尾分支：关掉常驻的自动化 Chrome，不处理任何链接
+    if args.close_browser:
+        if not chrome_ready(args.debug_port):
+            print(f"未发现常驻 Chrome 实例（端口 {args.debug_port} 无响应）。")
+            return 0
+        browser_close(args.debug_port)
+        if wait_chrome_exit(args.debug_port):
+            print(f"已关闭常驻 Chrome 实例（端口 {args.debug_port}）。")
+            return 0
+        print(f"未能确认 Chrome 退出（端口 {args.debug_port}）。", file=sys.stderr)
+        return 1
+
+    mode = resolve_mode(args)
 
     text = collect_text(args)
     output_dir = args.output_dir
@@ -1378,7 +1623,7 @@ def main(argv: list[str] | None = None) -> int:
         port=args.debug_port,
         chrome_path=args.chrome,
         profile_dir=args.profile_dir,
-        headless=not args.headed,
+        mode=mode,
         emit=emit,
     )
 
@@ -1389,7 +1634,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(payload, ensure_ascii=False))
         else:
             if data:
-                render_text(result, output_dir, headless=not args.headed)  # type: ignore[arg-type]
+                render_text(result, output_dir, mode=mode)  # type: ignore[arg-type]
             print(f"错误: {error.message}", file=sys.stderr)
         return 2
 
@@ -1409,7 +1654,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(json.dumps(envelope_ok(result.to_data()), ensure_ascii=False))
     else:
-        render_text(result, output_dir, headless=not args.headed)
+        render_text(result, output_dir, mode=mode)
     return 1 if result.failed else 0
 
 
