@@ -5,10 +5,11 @@
 ## 工作原理
 
 1. **持久化浏览器会话**：通过独立专用 Profile 运行 Chrome（**默认 `--headless=new`，屏幕上零痕迹**——无窗口、无任务栏图标），登录状态与 Cookie 永久保留，不污染日常浏览器。被抖音拦截时自动回退 `background` 模式（真 Chrome + 窗口移到屏幕外）。
-2. **抖音 — 底层网络流嗅探**：通过 CDP 连接（默认端口 9222），在网页视频播放时从浏览器底层资源通道（`<video>` 元素与 `performance.getEntriesByType('resource')`）截获无水印高清 MP4 CDN 直链。抖音是 DASH 音视频分离，`media-video-*` 与 `media-audio-*` 两条流分别截获后经 `ffmpeg -c copy` 合并。
-3. **抖音 — 免签名免反爬**：不做 a_bogus / msToken 签名逆向，直接复用真实浏览器的播放鉴权与 Cookie。
-4. **B 站 — API + 登录态**：直接调 B 站公开 web API（view / playurl，免签名）拿 DASH 流地址，登录态经 CDP 从同一 Chrome Profile 读取（含 HttpOnly 的 SESSDATA），清晰度跟随账号权益；DASH 音视频分离流经 `ffmpeg -c copy` 无损合并。
-5. **自动落盘**：默认保存到 `~/Downloads`，同名文件自动加 `_1`、`_2` 后缀，不覆盖既有文件。
+2. **抖音 — 底层网络流嗅探**：通过 CDP 连接（默认端口 9222），在网页视频播放时从浏览器底层资源通道（`<video>` 元素与 `performance.getEntriesByType('resource')`）截获无水印高清 MP4 CDN 直链。抖音是 DASH 音视频分离，`media-video-*` 与 `media-audio-*` 两条流分别截获后**按时间轴对齐**、经 `ffmpeg -c copy` 合并。
+3. **抖音 — 请求头「录制 → 复放」**：导航**之前**先在同一个 CDP 连接上 `Network.enable`，从 `Network.requestWillBeSentExtraInfo` 录下该请求的真实请求头（含 Cookie 与真实 Referer），下载时原样复放，只剔除 `range / if-range / content-length / content-type / accept-encoding / accept / accept-language / host / connection` 以及 HTTP/2 伪头。历史实现是手拼 `Referer` + 写死 `Chrome/120` 的 UA，签名 CDN 链接与 UA 绑定时会失稳。
+4. **抖音 — 免签名免反爬**：不做 a_bogus / msToken 签名逆向，直接复用真实浏览器的播放鉴权与 Cookie。
+5. **B 站 — API + 登录态**：直接调 B 站公开 web API（view / playurl，免签名）拿 DASH 流地址，登录态经 CDP 从同一 Chrome Profile 读取（含 HttpOnly 的 SESSDATA），清晰度跟随账号权益；DASH 音视频分离流经 `ffmpeg -c copy` 无损合并。
+6. **自动落盘**：默认保存到 `~/Downloads`，同名文件自动加 `_1`、`_2` 后缀，不覆盖既有文件。
 
 ## 依赖与单脚本形态
 
@@ -151,15 +152,22 @@ uv run scripts\build_exe.py --dir        # standalone 文件夹版（启动更�
 
 抖音是 **DASH 音视频分离**：`media-video-*` 与 `media-audio-*` 是两条独立流。`capture_stream_urls()` 扫 `performance` 资源记录后按 `media-audio` 分区成对取流（两者同属一份 manifest，时间轴天然对齐），下载后 `ffmpeg -c copy` 合并。`<video>` 元素 src 仅作视频兜底——实测它常指向另一路 rendition，优先用它会与音频失步。
 
+**时间轴对齐**：合并前用 `probe_duration()` 取两条流时长，差值超过 100 ms 时按 `min(时长)` 加 `-t` 裁齐，从根上避免长的那条在尾部留下静音 / 冻结帧；取不到时长时退化为 `-shortest`。思路取自 FetchV 的 `audioVideoCopy()`（见 `docs`/调研报告）。
+
+**兜底源不混配**：`capture_stream_urls()` 返回视频来源（`dash` / `element`）。若视频来自 `<video>` 元素兜底，则**主动放弃**与 DASH 音频配对——混用两路 rendition 会产生肉眼看不出的静默失步；此时该流自带音轨就记 `included`，否则记 `missing`。宁可明确无声，也不要静默失步。
+
 > 历史 bug：早期版本在抓流时用 `!n.includes('media-audio')` 主动滤掉音频，且命中 `<video>` 元素就提前 return，导致**抖音视频永远无声**。修复时同时加了 `probe_has_audio()`：若抓到的流本身已含音轨（走 `<video>` 兜底时可能发生），直接落盘而不再合并，避免出双音轨。
 
 ## 已知限制
 
 1. **抖音风控可能返回「验证中间页」**：此时该条失败并给出 `stream_not_found`。默认 `headless=new` 会**自动回退 `background`（真 Chrome）重试一遍**；若两者都没拿到流，用 `--headed` 重跑，在弹出的 Chrome 窗口内人工完成验证滑块后再重跑。工具不会伪造成功。
-2. **B 站需要登录态**：未登录（Profile 无 SESSDATA）时 B 站链接整批按 `bilibili_not_logged_in` 失败；SESSDATA 过期后同样处理，重新 `--headed` 登录一次即可。登录态质量决定清晰度档位（工具取服务端按权益下发的最高档）。
-3. **合并依赖 ffmpeg**：抖音 DASH 音视频流与 B 站 DASH 流都靠 `ffmpeg -c copy` 合并（无重编码，秒级完成）；本机 PATH 需有 `ffmpeg`，缺失时按 `ffmpeg_merge_failed` 失败，临时流会自动清理。抖音若始终抓不到音频流，会降级为无声视频并在结果里标 `audio: "missing"`（不伪造成功）。
-4. **Chrome 进程驻留后台**：运行结束后 Chrome 实例不退出（复用登录态与实例，后续运行秒连），属设计行为。结束方式：`--close-browser`（推荐），或任务管理器结束对应 Profile 的 `chrome.exe`。
-5. **短链解析依赖网络**：解析失败的抖音/B 站短链按 `invalid_url` 如实失败（不静默丢弃）。
-6. **抓取依赖 Chrome 与 CDP**：Profile 首次使用或长时间未用后可能需要重新登录/验证（抖音验证滑块、B 站登录各一次）。
-7. **需要 Chrome 已安装**在 `--chrome` 指定的路径。
-8. 标题含非法字符时会被替换为 `_`，文件名主干最长 50 字符；B 站多 P 追加 `_P{n}` 后缀。
+2. **抓流通道有已知盲区（重要）**：`capture_stream_urls()` 读的是 `performance.getEntriesByType('resource')`，即**文档时间线**。实测抖音的播放器有时走 MSE，媒体分片由页面内的 **Web Worker** 发出——Worker 的网络请求**不进入文档的 Resource Timing**，此时 Resource Timing 里 `douyinvod` 条目数为 **0**，而 CDP `Network` 事件能看到同样两条流。另需注意 Resource Timing 缓冲默认上限 250 条，页面静态资源多时会更早挤满。
+   - 实测证据（同一条视频、同一时刻）：`Resource Timing douyinvod = 0` vs `CDP Network = 2`（一视频一音频），页面附着 11 个 target、其中 6 个是 `blob:` worker。
+   - 因此**同一条链接可能这次成功、下次 `stream_not_found`**，取决于抖音这次给的是直链播放还是 MSE 播放。彻底的修法是改用 CDP `Network` 事件 + `Target.setAutoAttach` 覆盖 Worker target（尚未实施）。
+3. **B 站需要登录态**：未登录（Profile 无 SESSDATA）时 B 站链接整批按 `bilibili_not_logged_in` 失败；SESSDATA 过期后同样处理，重新 `--headed` 登录一次即可。登录态质量决定清晰度档位（工具取服务端按权益下发的最高档）。
+4. **合并依赖 ffmpeg**：抖音 DASH 音视频流与 B 站 DASH 流都靠 `ffmpeg -c copy` 合并（无重编码，秒级完成）；本机 PATH 需有 `ffmpeg`，缺失时按 `ffmpeg_merge_failed` 失败，临时流会自动清理。抖音若始终抓不到音频流，会降级为无声视频并在结果里标 `audio: "missing"`（不伪造成功）。
+5. **Chrome 进程驻留后台**：运行结束后 Chrome 实例不退出（复用登录态与实例，后续运行秒连），属设计行为。结束方式：`--close-browser`（推荐），或任务管理器结束对应 Profile 的 `chrome.exe`。
+6. **短链解析依赖网络**：解析失败的抖音/B 站短链按 `invalid_url` 如实失败（不静默丢弃）。
+7. **抓取依赖 Chrome 与 CDP**：Profile 首次使用或长时间未用后可能需要重新登录/验证（抖音验证滑块、B 站登录各一次）。
+8. **需要 Chrome 已安装**在 `--chrome` 指定的路径。
+9. 标题含非法字符时会被替换为 `_`，文件名主干最长 50 字符；B 站多 P 追加 `_P{n}` 后缀。标题轮询取不到时退化为 `douyin_<视频ID>`。

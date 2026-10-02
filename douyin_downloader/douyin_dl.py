@@ -13,9 +13,11 @@
 抖音：默认 headless-new 模式——Chrome 新版无头，实测可过抖音风控，屏幕上零痕迹（无窗口、
      无任务栏图标）。若某条 stream_not_found，整批自动改用 background 模式（真 Chrome +
      窗口移到屏幕外 + 静音，不抢焦点也不外放声音）重试一遍。
-     抖音为 DASH 音视频分离流，视频流与音频流分别下载后经 ffmpeg -c copy 合并；未捕获到
-     音频流时降级为无声视频并在结果里标记 audio=missing。--headed 切前台可见窗口（人工过
-     验证滑块）；--headless=old 为旧无头，已被抖音风控识别。
+    抖音为 DASH 音视频分离流：视频流与音频流分别下载，**按时间轴对齐后**经 ffmpeg -c copy
+     合并（ffprobe 取 min 时长再 -t 裁齐，避免长的那条在尾部留下静音/冻结帧）；未捕获到
+     音频流时降级为无声视频并在结果里标记 audio=missing。下载用的请求头优先复放 CDP 在导航
+     时录到的真实头（含 Cookie / 真实 Referer），而非手拼 Referer + 写死 UA。
+     --headed 切前台可见窗口（人工过验证滑块）；--headless=old 为旧无头，已被抖音风控识别。
 B 站：API + 浏览器登录态路线——复用同一 Chrome profile 的 cookie（SESSDATA），
      未登录时按 bilibili_not_logged_in 失败（首次先 --headed 登录一次 bilibili.com）；
      DASH 音视频分离流经 ffmpeg -c copy 合并，需本机已安装 ffmpeg。
@@ -46,7 +48,7 @@ from typing import Any, Callable, Iterable
 
 import websocket
 
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 PROG = "douyin_dl"
 # 项目目录名（monorepo 目录名）用下划线，与 CLI 程序名 PROG 区分
 PROJECT_DIR_NAME = "douyin_downloader"
@@ -132,8 +134,9 @@ def _schema_response_property() -> dict[str, Any]:
                 "type": "string",
                 "enum": ["merged", "included", "missing", "unknown"],
                 "description": (
-                    "音轨状态（仅成功记录带此字段）：merged=视频+音频经 ffmpeg 合并；"
-                    "included=单条流自带音轨无需合并；missing=未捕获到音频流，已降级为无声视频"
+                    "音轨状态（仅成功记录带此字段）：merged=视频+音频按时间轴对齐后经 ffmpeg 合并；"
+                    "included=单条流自带音轨无需合并；missing=未捕获到音频流（或视频来自 <video> "
+                    "元素兜底、与 DASH 音频不同源而被放弃配对），已降级为无声视频"
                 ),
             },
             "error": _obj(
@@ -246,7 +249,9 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                     "background 模式为真 Chrome + 窗口移到屏幕外 + 静音，因此屏幕上看不到也不外放声音；--headed 为前台可见窗口（人工过验证滑块 / 登录 B 站）",
                     "单条失败不中断整批，结果中逐条给出结构化错误",
                     "需要人工完成抖音验证滑块时该条失败，用 --headed 重跑后人工处理",
-                    "抖音为 DASH 音视频分离流，下载后经 ffmpeg -c copy 合并；未捕获到音频流时降级为无声视频并在 audio 字段标记 missing",
+                    "抖音为 DASH 音视频分离流，下载前按时间轴对齐（ffprobe 取 min 时长后 -t 裁齐，避免尾部静音/冻结帧），经 ffmpeg -c copy 合并；未捕获到音频流时降级为无声视频并在 audio 字段标记 missing",
+                    "抖音下载请求头优先复放 CDP 录制的真实请求头（Network.requestWillBeSentExtraInfo，含 Cookie 与真实 Referer），只剔除 range/content-length/content-type/accept-encoding/accept/accept-language；采集失败时退化为真实 UA + 抖音 Referer",
+                    "视频流来自 <video> 元素兜底时视为另一路 rendition，不与 DASH 音频配对（避免静默失步），该流自带音轨则记 included，否则记 missing",
                     "B 站链接复用同一 Chrome profile 的登录态（SESSDATA），未登录时该批按 bilibili_not_logged_in 失败；首次使用先 --headed 登录一次 bilibili.com",
                     "B 站视频为 DASH 音视频分离流，下载后经 ffmpeg -c copy 合并，需本机已安装 ffmpeg",
                     "裸 BV 号（BV+10 位字母数字）与 b23.tv 短链、bilibili.com 链接等效支持",
@@ -621,6 +626,149 @@ def cdp_get_cookies(port: int, url: str) -> dict[str, str]:
     return {c["name"]: c["value"] for c in result.get("cookies", [])}
 
 
+def browser_user_agent(port: int = DEBUG_PORT) -> str:
+    """取当前 Chrome 实例的真实 UA；失败回退 USER_AGENT。
+
+    历史实现把 UA 写死成 Chrome/120.0.0.0，与实际浏览器版本不符——签名 CDN 链接常与
+    UA 绑定，这种错配是潜在的失败源。
+    """
+    try:
+        with urllib.request.urlopen(cdpx_url(port, "/json/version"), timeout=2) as resp:
+            info = json.load(resp)
+        ua = (info.get("User-Agent") or "").strip()
+    except Exception:
+        ua = ""
+    return ua or USER_AGENT
+
+
+# 复放录制到的请求头时剔除的字段：这几个必须由本次请求自己决定，照搬会坏事。
+# 前六个与 FetchV 一致（见 research/fetchv-download-implementation.md §3.5 的 l 数组）。
+_NETWORK_IGNORED_REQUEST_HEADERS = frozenset(
+    {
+        "range",
+        "if-range",  # 页面的媒体请求常带它（条件 Range）；复放到一次全新的完整下载会导致 304/半截响应
+        "content-length",
+        "content-type",
+        "accept-encoding",
+        "accept",
+        "accept-language",
+        # CDP 额外暴露出、urllib 不能照搬的：Host 由 URL 推导，Connection 是逐跳头。
+        "host",
+        "connection",
+    }
+)
+
+# 合法 HTTP 字段名（RFC 9110 token）；CDP 会带出 HTTP/2 伪头（:authority / :method 等），
+# 它们以 ':' 开头、不是合法字段名，urllib 会直接抛 ValueError。
+_HTTP_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+
+def navigate_and_capture_headers(
+    ws_url: str,
+    url: str,
+    *,
+    settle: float = 6.0,
+    timeout: float = 30.0,
+) -> dict[str, dict[str, str]]:
+    """在同一个 CDP 连接里完成「挂 Network 监听 → 导航 → 收集真实请求头」。
+
+    必须在导航之前挂上监听，否则导航触发的请求一个都收不到——这正是把 Page.navigate
+    与事件收集放进同一个连接的原因。历史做法是下载时手拼 Referer + 写死 UA，漏掉
+    Cookie（抖音的 ttwid / msToken 带签名）就会失稳。
+
+    Cookie 与真实 Referer 只出现在 requestWillBeSentExtraInfo 里（requestWillBeSent 的
+    request.headers 会缺 Cookie），故两者按 requestId 合并、以后者为准。
+
+    返回 {完整 URL: {头名: 值}}；收集失败返回空字典，由调用方降级。
+    """
+    headers_by_url: dict[str, dict[str, str]] = {}
+    url_by_request: dict[str, str] = {}
+    ws = websocket.create_connection(ws_url, timeout=timeout)
+    try:
+        ws.send(json.dumps({"id": 1, "method": "Network.enable"}))
+        ws.send(json.dumps({"id": 101, "method": "Page.navigate", "params": {"url": url}}))
+        # 短超时 + 截止时间轮询：事件是零散到达的，不能一次 recv 就收工。
+        ws.settimeout(1.0)
+        deadline = time.time() + settle
+        while time.time() < deadline:
+            try:
+                raw = ws.recv()
+            except websocket.WebSocketTimeoutException:
+                continue
+            except (websocket.WebSocketConnectionClosedException, OSError):
+                break
+            if not raw:
+                continue
+            try:
+                msg = json.loads(raw)
+            except ValueError:
+                continue
+            method = msg.get("method")
+            params = msg.get("params") or {}
+            if method == "Network.requestWillBeSent":
+                request = params.get("request") or {}
+                target = request.get("url") or ""
+                request_id = params.get("requestId")
+                if request_id and target.startswith("http"):
+                    url_by_request[request_id] = target
+                    base = request.get("headers") or {}
+                    if isinstance(base, dict) and base:
+                        headers_by_url.setdefault(target, {}).update(base)
+            elif method == "Network.requestWillBeSentExtraInfo":
+                target = url_by_request.get(params.get("requestId") or "")
+                extra = params.get("headers")
+                if target and isinstance(extra, dict) and extra:
+                    headers_by_url.setdefault(target, {}).update(extra)
+    finally:
+        ws.close()
+    return headers_by_url
+
+
+def replayable_headers(recorded: dict[str, str] | None) -> dict[str, str]:
+    """把录制到的请求头整理成可复放的一整套。
+
+    剔除三类：① 必须由本次请求自决的字段（range/if-range/content-length/…）；
+    ② Host / Connection 这类由 URL 或连接决定、照搬必错的字段；
+    ③ CDP 带出的 HTTP/2 伪头（以 ':' 开头）及非法字段名——urllib 会抛
+    `ValueError: Invalid header name`。
+
+    字段名统一小写：CDP 的 requestWillBeSent 与 requestWillBeSentExtraInfo 大小写不一致
+    （Referer vs referer），不归一化会同时留下两份、靠 urllib 的 capitalize() 随机合并。
+    字典后写覆盖先写，于是 extraInfo 的值（更权威）胜出。
+    """
+    if not recorded:
+        return {}
+    replayable: dict[str, str] = {}
+    for name, value in recorded.items():
+        lowered = name.lower()
+        if lowered in _NETWORK_IGNORED_REQUEST_HEADERS or lowered.startswith(":"):
+            continue
+        if not _HTTP_TOKEN_RE.match(name):
+            continue
+        replayable[lowered] = value
+    return replayable
+
+
+def describe_headers(headers: dict[str, str]) -> str:
+    """日志用：列出复放的字段名，敏感值只报长度、不打明文（Cookie 绝不落日志）。"""
+    sensitive = {"cookie", "authorization", "proxy-authorization", "set-cookie"}
+    parts = []
+    for name in sorted(headers, key=str.lower):
+        if name.lower() in sensitive:
+            parts.append(f"{name}=**({len(headers[name])}B)")
+        else:
+            parts.append(name)
+    return ", ".join(parts)
+
+
+def douyin_request_headers(recorded: dict[str, str] | None, port: int = DEBUG_PORT) -> dict[str, str]:
+    """下载抖音流用的请求头：优先复放录制的真实头，否则退化为真实 UA + 抖音 Referer。"""
+    replayed = replayable_headers(recorded)
+    if replayed:
+        return replayed
+    return {"User-Agent": browser_user_agent(port), "Referer": "https://www.douyin.com/"}
+
+
 def navigate_page(ws_url: str, url: str, timeout: float = 20.0) -> None:
     ws = websocket.create_connection(ws_url, timeout=timeout)
     try:
@@ -633,22 +781,33 @@ def navigate_page(ws_url: str, url: str, timeout: float = 20.0) -> None:
         ws.close()
 
 
-def open_tab(target_url: str, port: int = DEBUG_PORT, host_filter: str = "douyin.com") -> str:
-    """复用已有目标站点标签页，必要时新建，返回该页的 webSocketDebuggerUrl。"""
+def open_tab(
+    target_url: str,
+    port: int = DEBUG_PORT,
+    host_filter: str = "douyin.com",
+    navigate: bool = True,
+) -> str:
+    """复用已有目标站点标签页，必要时新建，返回该页的 webSocketDebuggerUrl。
+
+    navigate=False 时只保证拿到标签页而不导航：抖音路径需要在导航**之前**挂 Network
+    监听，因此导航交给调用方（见 navigate_and_capture_headers）。
+    """
     tabs = [t for t in get_targets(port) if t.get("type") == "page" and host_filter in t.get("url", "")]
     if tabs:
         page = tabs[0]
         ws_url = page["webSocketDebuggerUrl"]
-        if target_url not in page.get("url", ""):
+        if navigate and target_url not in page.get("url", ""):
             print(f"[*] Navigating page to: {target_url}", file=sys.stderr)
             navigate_page(ws_url, target_url)
             time.sleep(3)
         return ws_url
 
-    put_url = cdpx_url(port, f"/json/new?{urllib.parse.quote(target_url, safe='')}")
+    create_url = target_url if navigate else "about:blank"
+    put_url = cdpx_url(port, f"/json/new?{urllib.parse.quote(create_url, safe='')}")
     req = urllib.request.Request(put_url, method="PUT")
     page = json.load(urllib.request.urlopen(req, timeout=10))
-    time.sleep(3)
+    if navigate:
+        time.sleep(3)
     return page["webSocketDebuggerUrl"]
 
 
@@ -702,15 +861,63 @@ def download_stream(video_url: str, output_path: str, headers: dict[str, str] | 
     return output_path, downloaded
 
 
-def merge_av_streams(video_path: str, audio_path: str, output_path: str) -> bool:
-    """ffmpeg -c copy 合并 B 站 DASH 音视频流（无重编码）。"""
+AV_TRIM_TOLERANCE = 0.1  # 秒：两条流时长差小于此值视为已对齐，不值得裁剪
+
+
+def probe_duration(media_path: str) -> float:
+    """用 ffprobe 取媒体时长（秒）；失败或取不到返回 0.0。"""
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     try:
         proc = subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", video_path, "-i", audio_path, "-c", "copy", output_path],
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+                media_path,
+            ],
             capture_output=True,
+            text=True,
             creationflags=flags,
         )
+    except OSError:
+        return 0.0
+    if proc.returncode != 0:
+        return 0.0
+    try:
+        value = float((proc.stdout or "").strip())
+    except ValueError:
+        return 0.0
+    return value if value > 0 else 0.0
+
+
+def merge_av_streams(video_path: str, audio_path: str, output_path: str) -> bool:
+    """ffmpeg -c copy 合并 DASH 音视频流（无重编码）。
+
+    合并前先按时间轴对齐：两条流时长不等时裁到重叠区间，避免长的那条在尾部留下
+    静音 / 冻结帧。思路取自 FetchV 的 audioVideoCopy()——它按 start/end 时间戳把
+    两个队列的尾巴裁到重叠区间，见 research/fetchv-download-implementation.md §5。
+    整文件合并场景下等价做法是用 ffprobe 取 min(时长) 后交给 ffmpeg -t。
+
+    ffprobe 取不到时长时退化为 -shortest（近似对齐）；两者都失效则按原样合并，
+    至少不比历史行为更差。
+    """
+    video_dur = probe_duration(video_path)
+    audio_dur = probe_duration(audio_path)
+    overlap = 0.0
+    if video_dur and audio_dur and abs(video_dur - audio_dur) > AV_TRIM_TOLERANCE:
+        overlap = min(video_dur, audio_dur)
+
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", video_path, "-i", audio_path]
+    cmd += ["-t", f"{overlap:.3f}"] if overlap else ["-shortest"]
+    cmd += ["-c", "copy", output_path]
+
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        proc = subprocess.run(cmd, capture_output=True, creationflags=flags)
     except OSError:
         return False
     return proc.returncode == 0
@@ -1020,39 +1227,64 @@ _JS_VIDEO_SRC = (
     "Array.from(document.querySelectorAll('video')).map(v => v.currentSrc || v.src).filter(Boolean)"
 )
 
+# 视频流来源：dash = 资源记录里的 DASH 成对流（与 media-audio 同属一份 manifest）；
+# element = <video> 元素 src 兜底（实测常指向另一路 rendition，与 DASH 音频不同源）。
+VIDEO_SOURCE_DASH = "dash"
+VIDEO_SOURCE_ELEMENT = "element"
 
-def capture_stream_urls(ws_url: str, attempts: int = 12, interval: float = 1.0) -> tuple[str, str]:
-    """在页面中轮询捕获 (视频流地址, 音频流地址)。
+
+def page_title(ws_url: str, attempts: int = 8, interval: float = 1.0) -> str:
+    """轮询取页面标题（抖音是 SPA，标题在详情接口返回后才写入，读一次会拿到空串）。
+
+    取不到时返回空串，由调用方用 douyin_<视频ID> 兜底——不因为标题没就绪就丢掉文件名。
+    """
+    for _ in range(attempts):
+        try:
+            title = str(eval_cdp(ws_url, "document.title") or "").strip()
+        except Exception:
+            title = ""
+        if title:
+            return title
+        time.sleep(interval)
+    return ""
+
+
+def capture_stream_urls(ws_url: str, attempts: int = 12, interval: float = 1.0) -> tuple[str, str, str]:
+    """在页面中轮询捕获 (视频流地址, 音频流地址, 视频来源)。
 
     抖音是 DASH 音视频分离：`media-video-*` 与 `media-audio-*` 是两条独立流，只取其一
     必然残缺（历史 bug：这里曾用 `!n.includes('media-audio')` 主动滤掉音频，导致抖音
     视频永远无声）。两者同属一份 manifest，时间轴天然对齐，下载后经 ffmpeg 合并。
 
-    优先级：资源记录里的 DASH 成对流 > `<video>` 元素 src（仅作视频兜底——实测它常指向
-    另一路 rendition，与音频不同源，混用有失步风险）。音频缺失不算失败，由调用方降级处理。
+    优先级：资源记录里的 DASH 成对流 > `<video>` 元素 src（仅作视频兜底）。返回的视频
+    来源供调用方判断能否与 DASH 音频配对——混用两路 rendition 会造成静默失步。
+    音频缺失不算失败，由调用方降级处理。
     """
     video_url = ""
     audio_url = ""
+    video_source = ""
     for _ in range(attempts):
         resources = eval_cdp(ws_url, _JS_DOUYIN_RESOURCES) or []
         audio = [u for u in resources if "media-audio" in u]
         video = [u for u in resources if "media-audio" not in u and "/video/tos/" in u]
         if video:
             video_url = video[-1]
+            video_source = VIDEO_SOURCE_DASH
         if audio:
             audio_url = audio[-1]
         if video_url and audio_url:
-            return video_url, audio_url
+            return video_url, audio_url, video_source
 
         if not video_url:
             srcs = eval_cdp(ws_url, _JS_VIDEO_SRC) or []
             for src in srcs:
                 if src.startswith("http") and not src.startswith("blob:"):
                     video_url = src
+                    video_source = VIDEO_SOURCE_ELEMENT
                     break
 
         time.sleep(interval)
-    return video_url, audio_url
+    return video_url, audio_url, video_source
 
 
 def download_one(
@@ -1075,23 +1307,38 @@ def download_one(
         if video_url not in input_url:
             emit(f"[*] Resolved: {input_url} -> {video_url}")
 
-        # 若当前标签页不在目标页面，先导航过去
+        # 导航与请求头采集必须在同一个 CDP 连接里：监听晚于导航就一个请求头都收不到。
+        emit(f"[*] Navigating page to: {video_url}")
+        recorded: dict[str, dict[str, str]] = {}
         try:
-            current = get_targets(port)
-        except Exception:
-            current = []
-        for tab in current:
-            if tab.get("webSocketDebuggerUrl") == tab_ws_url and video_url in tab.get("url", ""):
-                break
-        else:
-            emit(f"[*] Navigating page to: {video_url}")
-            navigate_page(tab_ws_url, video_url)
-            time.sleep(3)
+            recorded = navigate_and_capture_headers(tab_ws_url, video_url)
+        except Exception as exc:  # 采集失败不致命：退化为 UA + Referer 手拼
+            emit(f"[!] 请求头采集失败（{type(exc).__name__}: {exc}），退化为默认头。")
 
-        title = eval_cdp(tab_ws_url, "document.title") or ""
-        video_stream, audio_stream = capture_stream_urls(tab_ws_url)
+        video_stream, audio_stream, video_source = capture_stream_urls(tab_ws_url)
         if not video_stream:
             raise AppError("stream_not_found", ERROR_MESSAGES["stream_not_found"])
+
+        # 标题在抓到流之后再读：此时页面必然已加载完成。抖音是 SPA，标题晚于
+        # 详情接口返回才写入，之前在此处读一次会周期性拿到空串、文件名退化成视频 ID。
+        title = page_title(tab_ws_url)
+
+        if video_source == VIDEO_SOURCE_ELEMENT and audio_stream:
+            # <video> 元素 src 常指向另一路 rendition，与 DASH 音频不同源；配对会造成
+            # 静默失步（肉眼看不出来），所以宁可明确降级为无声，也不混源。
+            emit(
+                "[!] 视频流来自 <video> 元素兜底（另一路 rendition），与 DASH 音频不同源，"
+                "已放弃配对以避免静默失步；该流若自带音轨会直接采用。"
+            )
+            audio_stream = ""
+
+        video_headers = douyin_request_headers(recorded.get(video_stream), port)
+        audio_headers = douyin_request_headers(recorded.get(audio_stream), port) if audio_stream else {}
+        emit(
+            f"[*] 复放请求头 {len(video_headers)} 个"
+            f"（来源：{'CDP 录制' if replayable_headers(recorded.get(video_stream)) else '默认 UA + Referer'}）"
+            f" {describe_headers(video_headers)}"
+        )
 
         stem = clean_title(str(title), f"douyin_{record.video_id}")
         output_path = unique_path(output_dir, stem)
@@ -1104,14 +1351,14 @@ def download_one(
         video_tmp = output_path + ".video.mp4"
         audio_tmp = output_path + ".audio.m4a"
         try:
-            saved_path, _ = download_stream(video_stream, video_tmp)
+            saved_path, _ = download_stream(video_stream, video_tmp, video_headers)
             if probe_has_audio(video_tmp):
                 # 兜底源本身已是合流，直接落盘：再合并一次会出双音轨
                 os.replace(video_tmp, output_path)
                 record.audio = "included"
             elif audio_stream:
                 emit("[*] Downloading audio stream...")
-                download_stream(audio_stream, audio_tmp)
+                download_stream(audio_stream, audio_tmp, audio_headers)
                 emit("[*] Merging with ffmpeg...")
                 if not merge_av_streams(video_tmp, audio_tmp, output_path):
                     raise AppError("ffmpeg_merge_failed", ERROR_MESSAGES["ffmpeg_merge_failed"])
@@ -1291,7 +1538,9 @@ def run_downloads(
         for index, url in enumerate(urls, start=1):
             emit(f"[*] {label}({index}/{len(urls)}) {url}")
             try:
-                tab_ws_url = open_tab(resolve_video_url(url), port, "douyin.com")
+                # navigate=False：导航连同请求头采集一起交给 download_one，
+                # 否则这里先导航一次，Network 监听就挂晚了、收不到任何请求头。
+                tab_ws_url = open_tab(resolve_video_url(url), port, "douyin.com", navigate=False)
             except AppError as exc:
                 records.append(
                     DownloadRecord(
