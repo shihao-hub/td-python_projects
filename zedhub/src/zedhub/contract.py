@@ -47,6 +47,7 @@ class LinkBody(BaseModel):
     all_dirs: bool = False            # 命中多目录时逐目录处理
     target: str | None = None         # 强制统一目标工作区
     include_subagents: bool = False
+    exact: bool = False               # true = 归一化后与目录路径完全相等才命中
     apply: bool = False               # 默认 dry-run；true 才写库
 
 

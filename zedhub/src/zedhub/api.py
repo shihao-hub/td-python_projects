@@ -319,6 +319,7 @@ def _sessions_link(params: dict, ctx: CallContext, progress=noop_progress) -> An
         all_dirs=bool(params.get("all_dirs")),
         target=target,
         include_subagents=bool(params.get("include_subagents")),
+        exact=bool(params.get("exact")),
         apply=bool(params.get("apply")),
         zed_db=ctx.zed_db,
         opencode_db=ctx.opencode_db,

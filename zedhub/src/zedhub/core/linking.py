@@ -2,12 +2,13 @@
 
 - 复用原 session_id（正文关联不断）、uuid4().bytes 作 thread_id；时间统一
   转 Zed UTC ISO（9 位小数 + +00:00）；
-- source=opencode：走 OpenCode session 表（毫秒时间戳 → Zed ISO），查重
-  语义保持**全局 session_id**（存量行为不动）；
+- source=opencode：走 OpenCode session 表（毫秒时间戳 → Zed ISO）；
 - source=claude-code/codex/antigravity：走 agent_sessions 浅层元数据扫描
-  （时间已是 Zed ISO），查重按 ``(agent_id, session_id, 目标目录)`` 三元组
-  ——同会话跨目录允许新挂（原目录入口保留，两个工作区都能打开）；
-- 目录子串匹配 + ``--all``/``--target`` 消歧（逻辑照搬归档脚本）；
+  （时间已是 Zed ISO）；
+- 查重按 ``(agent_id, session_id, 目标目录)`` 三元组（全源统一）——同会话
+  跨目录允许新挂（原目录入口保留，两个工作区都能打开）；
+- 目录子串匹配 + ``--all``/``--target`` 消歧（逻辑照搬归档脚本）+ ``--exact``
+  精确目录匹配（归一化后全等才命中，对齐 archive export）；
 - 幂等：已存在的目标行跳过；写入单事务；复查插入的 (session_id, folder)
   集合与快照重读比对；
 - 默认 dry-run；``apply=True`` 走完整流水线：进程检查 → 备份 → 事务 →
@@ -36,7 +37,6 @@ from .processes import assert_writable, find_running
 from .backup import backup_database
 from .writes import checkpoint_wal, new_operation_id, noop_progress, ro_query, run_write_transaction, ProgressFn
 
-from .repo import ZedDb
 from .snapshot import open_opencode_ro, open_snapshot, resolve_db_path, default_zed_db_dir, default_opencode_db_path
 from .opencode_repo import OpencodeDb
 
@@ -66,6 +66,7 @@ class LinkPlan:
     skipped_subagents: int = 0
     already_linked: int = 0
     no_directory: int = 0                                   # 三源：无法定位目录被跳过数
+    exact: bool = False                                      # --exact：归一化后全等匹配
 
 
 def _load_opencode_sessions(opencode_db: Path) -> list[dict]:
@@ -113,15 +114,11 @@ def _load_agent_sessions(source: str) -> tuple[list[dict], int]:
     return sessions, no_directory
 
 
-def _zed_linked_ids(zed_db: Path) -> set[str]:
-    with open_snapshot(zed_db) as snap:
-        with ZedDb(snap) as db:
-            return db.linked_session_ids()
+def _zed_index_meta(zed_db: Path, agent_id: str) -> tuple[set[tuple[str, str]], dict[str, str]]:
+    """Zed 索引中某 agent 的 ``(session_id, folder)`` 集合与 ``{sid: title}``。
 
-
-def _zed_linked_folders(zed_db: Path, agent_id: str) -> set[tuple[str, str]]:
-    """Zed 索引中某 agent 的 ``(session_id, folder)`` 集合（三源查重用）。
-
+    前者供查重；后者供空 title 回填（antigravity 对话本体是 protobuf 无法
+    解析标题，补登行沿用 Zed 原行已生成的 title，避免显示默认线程名）。
     folder_paths 换行分隔多值，逐行展开；两边都 normpath 后比较，避免
     分隔符差异造成重复挂载。
     """
@@ -129,19 +126,22 @@ def _zed_linked_folders(zed_db: Path, agent_id: str) -> set[tuple[str, str]]:
         con = sqlite3.connect(f"file:{snap}?mode=ro", uri=True)
         try:
             rows = con.execute(
-                "SELECT session_id, folder_paths FROM sidebar_threads"
+                "SELECT session_id, folder_paths, title FROM sidebar_threads"
                 " WHERE agent_id = ? AND session_id IS NOT NULL",
                 (agent_id,),
             ).fetchall()
         finally:
             con.close()
-    out: set[tuple[str, str]] = set()
-    for sid, folders in rows:
+    pairs: set[tuple[str, str]] = set()
+    titles: dict[str, str] = {}
+    for sid, folders, title in rows:
+        if title and sid not in titles:
+            titles[sid] = title
         for p in (folders or "").split("\n"):
             p = p.strip()
             if p:
-                out.add((sid, normalize_dir(p)))
-    return out
+                pairs.add((sid, normalize_dir(p)))
+    return pairs, titles
 
 
 def plan_link(
@@ -151,15 +151,16 @@ def plan_link(
     all_dirs: bool = False,
     target: str | None = None,
     include_subagents: bool = False,
+    exact: bool = False,
     zed_db: Path,
     opencode_db: Path,
 ) -> LinkPlan:
     """生成补登计划（纯读，dry-run 与 apply 共用）。"""
     if source == "opencode":
-        plan = LinkPlan(query=query, source=source)
+        plan = LinkPlan(query=query, source=source, exact=exact)
         sessions = _load_opencode_sessions(opencode_db)
     elif source in FILE_SOURCES:
-        plan = LinkPlan(query=query, source=source)
+        plan = LinkPlan(query=query, source=source, exact=exact)
         sessions, plan.no_directory = _load_agent_sessions(source)
     else:
         raise InvalidParamsError(
@@ -172,7 +173,12 @@ def plan_link(
         plan.skipped_subagents = before - len(sessions)
 
     q = normalize_dir(query.strip()).lower()
-    matched = [s for s in sessions if q and q in s["directory"].lower()]
+    if exact:
+        # --exact：归一化后与目录完全相等才命中，不带出子目录（对齐 archive export）
+        want = q.casefold()
+        matched = [s for s in sessions if s["directory"].casefold() == want]
+    else:
+        matched = [s for s in sessions if q and q in s["directory"].lower()]
     if not matched:
         raise NotFoundError(f"未找到目录匹配 {query!r} 的会话")
 
@@ -197,24 +203,18 @@ def plan_link(
     else:
         plan.link_dir = next(iter(groups))
 
-    if source == "opencode":
-        # 存量语义：全局 session_id 查重（不动已交付行为的幂等预期）
-        linked = _zed_linked_ids(zed_db)
-        for s in matched:
-            if s["id"] in linked:
-                plan.already_linked += 1
-                continue
-            folder = plan.link_dir if plan.link_dir is not None else s["directory"]
-            plan.to_insert.append((s, folder))
-    else:
-        # 三源语义：(agent_id, session_id, 目标目录) 三元组查重——跨目录允许新挂
-        linked = _zed_linked_folders(zed_db, agent_id_for(source))
-        for s in matched:
-            folder = plan.link_dir if plan.link_dir is not None else s["directory"]
-            if (s["id"], normalize_dir(folder)) in linked:
-                plan.already_linked += 1
-                continue
-            plan.to_insert.append((s, folder))
+    # 统一查重语义：(agent_id, session_id, 目标目录) 三元组——同会话跨目录
+    # 允许新挂（原目录入口保留）；同目录重复补登才跳过（幂等）。
+    # 空 title 从 Zed 原行回填（antigravity 扫描层拿不到标题）。
+    linked, zed_titles = _zed_index_meta(zed_db, agent_id_for(source))
+    for s in matched:
+        folder = plan.link_dir if plan.link_dir is not None else s["directory"]
+        if (s["id"], normalize_dir(folder)) in linked:
+            plan.already_linked += 1
+            continue
+        if not s["title"] and s["id"] in zed_titles:
+            s["title"] = zed_titles[s["id"]]
+        plan.to_insert.append((s, folder))
     return plan
 
 
@@ -328,6 +328,7 @@ def run_link(
     all_dirs: bool = False,
     target: str | None = None,
     include_subagents: bool = False,
+    exact: bool = False,
     apply: bool = False,
     zed_db: Path | None,
     opencode_db: Path | None,
@@ -339,7 +340,7 @@ def run_link(
 
     plan = plan_link(
         project, source=source, all_dirs=all_dirs, target=target,
-        include_subagents=include_subagents, zed_db=zed, opencode_db=oc,
+        include_subagents=include_subagents, exact=exact, zed_db=zed, opencode_db=oc,
     )
     progress("validate", f"命中 {len(plan.matched_sessions)} 个会话，待补登 {len(plan.to_insert)}", 5)
     if not apply or not plan.to_insert:
@@ -371,6 +372,7 @@ def _result(operation: OperationRecord, plan: LinkPlan, *, applied: bool, note: 
         "status": operation.status,
         "query": plan.query,
         "source": plan.source,
+        "match_mode": "exact" if plan.exact else "substring",
         "matched": len(plan.matched_sessions),
         "directories": plan.groups,
         "skipped_subagents": plan.skipped_subagents,

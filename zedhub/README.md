@@ -89,7 +89,8 @@ zedhub mcp    ← MCP 桥：stdio(MCP) ↔ HTTP daemon
 session_id，正文不断链），默认 dry-run：
 
 - `sessions link <dir>`（默认 **opencode**）：查 OpenCode session 表；
-  查重为**全局 session_id**（存量语义：任何目录已有该会话入口即跳过）；
+- `--exact`：目录按**归一化后全等**匹配（默认子串匹配会带出子目录），
+  与 `archive export --exact` 同语义；
 - `sessions link <dir> --source claude-code|codex|antigravity`：浅层扫描
   各源用户级数据根（只读会话文件头部与尾部残段，不解析正文）：
   - claude-code：`~/.claude/projects/*/<sid>.jsonl`（行内 `cwd` 锚定目录，
@@ -99,18 +100,20 @@ session_id，正文不断链），默认 dry-run：
     `cwd`；对话本体是 protobuf，标题留空，时间用 `.db` 文件 mtime；
   - 无法定位目录的会话（如 antigravity 无 `.meta`）计入 `no_directory`
     跳过，不猜测；
-- **跨目录挂载**（仅三源）：查重按 `(agent_id, session_id, 目标目录)` 三元组，
-  同一会话可在另一个工作区目录再挂一份入口（原目录入口保留，两个工作区
-  都能打开同一会话）：
+- **查重语义（全源统一）**：按 `(agent_id, session_id, 目标目录)` 三元组，
+  同目录重复补登才跳过；同一会话可在另一个工作区目录再挂一份入口
+  （原目录入口保留，两个工作区都能打开同一会话）：
 
 ```powershell
 uv run zedhub sessions link language_projects --source antigravity            # dry-run
 uv run zedhub sessions link .thirdparty --source antigravity --target <nanocode>  # 挂到另一工作区（--apply 才写）
+uv run zedhub sessions link "D:\path\from" --target "D:\path\to" --exact      # 只认全等目录（--apply 才写）
 ```
 
 - 已知边界：三源补登的 thread 一律 `archived=0`；环境注入块
   （`<environment_context>`、`# AGENTS.md instructions` 等）不作标题；
-  opencode 的全局查重语义保持不变（跨目录挂载仅三源）。
+  空 title 从 Zed 索引既有行回填（antigravity 对话本体是 protobuf，
+  扫描层拿不到标题），避免显示默认线程名；查重语义不再按源区分。
 
 ## WebSocket 冻结声明
 
