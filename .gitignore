@@ -29,3 +29,7 @@ dist/
 
 # 敏感配置（示例文件 .env.example 保留入库）
 .env
+
+# 本地 SQLite 数据库（运行时投影，不入库）
+*.db
+
