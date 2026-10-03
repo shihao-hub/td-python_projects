@@ -1,6 +1,12 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["nuitka>=2.5", "websocket-client>=1.8", "zstandard>=0.22"]
+# dependencies = [
+#     "nuitka>=2.5",
+#     "websocket-client>=1.8",
+#     "zstandard>=0.22",
+#     "beautifulsoup4>=4.12",
+#     "html2text>=2024.2.26",
+# ]
 # ///
 """构建 douyin_dl.exe（Nuitka 打包固化脚本）。
 
@@ -11,9 +17,9 @@
     uv run scripts/build_exe.py --no-icon       # 不带图标
 
     要点：
-    - 本脚本环境必须同时安装 nuitka 与 websocket-client：
-      Nuitka 靠「编译期解释器可 import」来定位第三方包，缺 websocket-client
-      会导致包不被打进 exe，运行时报 ModuleNotFoundError。
+    - 本脚本环境必须与 douyin_dl.py 的 PEP 723 依赖保持一致（websocket-client、
+      beautifulsoup4、html2text）：Nuitka 靠「编译期解释器可 import」来定位第三方包，
+      漏声明哪个，哪个就不会被打进 exe，运行时报 ModuleNotFoundError。
       zstandard 用于 onefile 压缩（缺了只是体积更大，不影响功能）。
     - onefile 解压目录固定为 %LOCALAPPDATA%/douyin_dl/<版本>，
       首次运行解压后缓存复用（秒开），版本升级自动换新目录。

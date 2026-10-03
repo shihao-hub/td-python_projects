@@ -1,6 +1,6 @@
-# Douyin/Bilibili Video Downloader (CDP + API)
+# Douyin/Bilibili Downloader + Zhihu Article Extractor (CDP + API)
 
-抖音 + B 站视频下载工具（uv 单脚本）。抖音走 CDP 无损高清直链嗅探；B 站走公开 API + 浏览器登录态（cookie）路线，清晰度跟随账号权益（1080P+）。**单文件形态**：一个 `douyin_dl.py` 自带依赖声明，无需 `pyproject.toml` / `requirements.txt` / 虚拟环境目录。
+抖音 + B 站视频下载 / 知乎文章提取工具（uv 单脚本）。抖音走 CDP 无损高清直链嗅探；B 站走公开 API + 浏览器登录态（cookie）路线，清晰度跟随账号权益（1080P+）；知乎走真实浏览器 + 登录态，把回答/专栏文章正文原封不动提取为 Markdown + 本地原图。**单文件形态**：一个 `douyin_dl.py` 自带依赖声明，无需 `pyproject.toml` / `requirements.txt` / 虚拟环境目录。
 
 ## 工作原理
 
@@ -9,7 +9,23 @@
 3. **抖音 — 请求头「录制 → 复放」**：导航**之前**先在同一个 CDP 连接上 `Network.enable`，从 `Network.requestWillBeSentExtraInfo` 录下该请求的真实请求头（含 Cookie 与真实 Referer），下载时原样复放，只剔除 `range / if-range / content-length / content-type / accept-encoding / accept / accept-language / host / connection` 以及 HTTP/2 伪头。历史实现是手拼 `Referer` + 写死 `Chrome/120` 的 UA，签名 CDN 链接与 UA 绑定时会失稳。
 4. **抖音 — 免签名免反爬**：不做 a_bogus / msToken 签名逆向，直接复用真实浏览器的播放鉴权与 Cookie。
 5. **B 站 — API + 登录态**：直接调 B 站公开 web API（view / playurl，免签名）拿 DASH 流地址，登录态经 CDP 从同一 Chrome Profile 读取（含 HttpOnly 的 SESSDATA），清晰度跟随账号权益；DASH 音视频分离流经 `ffmpeg -c copy` 无损合并。
-6. **自动落盘**：默认保存到 `~/Downloads`，同名文件自动加 `_1`、`_2` 后缀，不覆盖既有文件。
+6. **知乎 — 浏览器渲染 + 登录态提取**：知乎正文是登录后才完整下发的富文本，且匿名直连返回 403，故同样走真实浏览器：CDP 读登录态（关键 cookie `z_c0` 为 HttpOnly）→ 打开目标页 → 等正文容器渲染 → 浏览器内 JS 分段滚动触发图片懒加载后取容器 `innerHTML` → Python 侧用 BeautifulSoup 清洗（剥壳/图注斜体化/图片本地化）+ html2text 转 Markdown → 原图逐张下载到文章目录。
+7. **自动落盘**：抖音/B 站视频默认保存到 `~/Downloads`，同名文件自动加 `_1`、`_2` 后缀；知乎每篇文章一个独立目录 `~/Downloads/zhihu/{标题}/`（`article.md` + `images/`），目录重名同样加后缀，均不覆盖既有产物。
+
+## 依赖与单脚本形态
+
+依赖通过文件头部的 PEP 723 内联元数据声明，`uv run` 会自动准备隔离环境：
+
+```python
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["websocket-client>=1.8", "beautifulsoup4>=4.12", "html2text>=2024.2.26"]
+# ///
+```
+
+- 推荐入口：`uv run douyin_dl.py ...`
+- 若当前 Python 环境已装上述三个依赖，`python douyin_dl.py ...` 同样可用。
+- `beautifulsoup4` 与 `html2text` 均为纯 Python（无编译产物），仅知乎提取链路使用。
 
 ## 依赖与单脚本形态
 
@@ -27,9 +43,9 @@
 
 ## 使用方法
 
-### 从一段文本里提取链接并下载
+### 从一段文本里提取链接并下载 / 提取
 
-传入抖音分享文案、B 站链接或裸 BV 号即可，工具会自己找出其中的链接并按域名自动分流：
+传入抖音分享文案、B 站链接、裸 BV 号或知乎回答/专栏文章链接即可，工具会自己找出其中的链接并按域名自动分流：
 
 ```powershell
 cd D:\Users\language_projects\python_projects\douyin_downloader
@@ -41,15 +57,20 @@ uv run douyin_dl.py "8.74 S@Y.ZZ Uyt:/ :3pm 09/26 5 分钟学会写架构设计 
 uv run douyin_dl.py "https://b23.tv/ApmE1Nd"
 uv run douyin_dl.py "BV1B6YR6gEyd"
 
-# 混合输入：一条命令两类链接都下载
-uv run douyin_dl.py "https://v.douyin.com/EBgtkB68340/ https://b23.tv/ApmE1Nd"
+# 知乎：回答（/question/<qid>/answer/<aid>）与专栏文章（/p/<pid>）
+uv run douyin_dl.py "https://www.zhihu.com/question/1923534024288236685/answer/2021258227166319271"
+uv run douyin_dl.py "https://zhuanlan.zhihu.com/p/123456789"
+
+# 混合输入：一条命令三类链接都处理
+uv run douyin_dl.py "https://v.douyin.com/EBgtkB68340/ https://b23.tv/ApmE1Nd https://zhuanlan.zhihu.com/p/123456789"
 ```
 
 规则：
 
-- 文本中的**所有**链接都会被检查：抖音与 B 站链接逐个下载（串行，复用同一个 Chrome 与标签页）；**不支持的链接跳过**，并在结果里明确列出（`reason: not_supported`，不会静默丢弃）。
+- 文本中的**所有**链接都会被检查：抖音与 B 站链接逐个下载、知乎链接逐篇提取（串行，复用同一个 Chrome 与标签页）；**不支持的链接跳过**，并在结果里明确列出（`reason: not_supported`，不会静默丢弃）。
 - 裸 BV 号（`BV` + 10 位字母数字）与 URL 中已带的 BV 号自动去重，不会重复下载。
 - B 站多 P 视频：链接带 `?p=N` 时只下指定 P；不带 `p` 且为多 P 时**全部下载**（每 P 一条记录，文件名带 `_P{n}`）。
+- 知乎只支持回答与专栏文章两类链接；想法（`/pin/`）、收藏夹、问题页整页等其他知乎链接按 `invalid_url` 失败（不静默跳过）。
 - 支持多段参数（以换行拼接）、字面 `\n` 作为换行、以及从管道读入：
 
 ```powershell
@@ -58,7 +79,34 @@ uv run douyin_dl.py --json -            # '-' 显式表示从 stdin 读
 ```
 
 - 抖音短链（`v.douyin.com/xxxx`）与 B 站短链（`b23.tv/xxxx`）都会自动跟随重定向解析。
-- **必须能提取到抖音或 B 站链接**，否则按错误退出（无内置默认链接）。
+- **必须能提取到抖音、B 站或知乎链接**，否则按错误退出（无内置默认链接）。
+
+### 知乎产出目录布局
+
+每篇文章一个独立目录，正文与图片分离存放，Markdown 用相对路径引用图片（可整目录拷走）：
+
+```
+~/Downloads/zhihu/{标题}/
+├── article.md          # 标题 + 来源/作者/提取时间元信息 + 正文（html2text 转换）
+└── images/
+    ├── image_001.jpg   # 正文原图，按出现顺序编号（同 URL 只存一份）
+    └── image_002.png
+```
+
+- 目录名清洗知乎标题末尾的「 - 知乎」后缀与 Windows 非法字符，最长 50 字符；重名自动加 `_1`、`_2` 后缀。
+- 图片取原图候选（`data-actualsrc` → `data-original` → `srcset` 最大候选 → `src`），请求带 `Referer: https://www.zhihu.com/` 与全量知乎 cookie。
+- **单张图片下载失败不影响任务成功**：该图在 Markdown 中保留原始 URL 引用，失败张数记入 `images_failed`。
+- 段落/引用/代码块/列表/加粗斜体按原样转换；中文标点紧贴强调标记时不补多余空格，段落之间保留空行。
+
+### 知乎首次登录引导
+
+知乎走登录态路线（`z_c0` 为 HttpOnly，只能经 CDP 读取），未登录时该批知乎链接按 `zhihu_not_logged_in` 失败：
+
+```powershell
+uv run douyin_dl.py --headed "https://zhuanlan.zhihu.com/p/123456789"
+```
+
+工具会弹出 Chrome 窗口并打开 zhihu.com，人工完成登录后**重跑命令**即可（Cookie 随专用 Profile 持久化并自动续期，之后无需再登录）。
 
 ### B 站首次登录引导
 
@@ -82,14 +130,15 @@ uv run douyin_dl.py --help
 JSON 包络（仓库统一约定）：
 
 ```json
-{"ok": true, "data": {"downloaded": [], "skipped": [], "summary": {"total": 0, "succeeded": 0, "failed": 0, "skipped": 0}}}
-{"ok": false, "error": {"code": "no_url", "message": "输入文本中未发现任何链接"}, "data": {"downloaded": [], "skipped": [], "summary": {"total": 0, "succeeded": 0, "failed": 0, "skipped": 0}}}
+{"ok": true, "data": {"downloaded": [], "extracted": [], "skipped": [], "summary": {"total": 0, "succeeded": 0, "failed": 0, "skipped": 0, "extracted": 0}}}
+{"ok": false, "error": {"code": "no_url", "message": "输入文本中未发现任何链接"}, "data": {"downloaded": [], "extracted": [], "skipped": [], "summary": {"total": 0, "succeeded": 0, "failed": 0, "skipped": 0, "extracted": 0}}}
 ```
 
-- 成功项字段：`input_url` / `video_url` / `video_id` / `title` / `path` / `bytes`；失败项另带 `error{code,message,detail}`。B 站多 P 时 `downloaded` 含多条记录（`video_id` 形如 `BVxxx_p2`）。
+- 视频成功项字段：`input_url` / `video_url` / `video_id` / `title` / `path` / `bytes`；失败项另带 `error{code,message,detail}`。B 站多 P 时 `downloaded` 含多条记录（`video_id` 形如 `BVxxx_p2`）。
+- 知乎提取项在 `extracted` 数组：`input_url` / `article_url` / `article_id` / `ok` / `title` / `path` / `images_total` / `images_failed`，失败项另带 `error{code,message,detail}`。
 - 部分成功时 `ok:false` 同时携带完整 `data`（有效结果不丢）。
-- 错误码：`no_input`、`no_url`、`no_douyin_url`、`chrome_launch_failed`、`invalid_url`、`stream_not_found`、`download_failed`、`bilibili_not_logged_in`（B 站 profile 无 SESSDATA）、`bilibili_api_error`（view/playurl 调用失败）、`ffmpeg_merge_failed`（合并失败）。
-- 退出码：`0` 全部成功；`1` 存在失败项或部分成功；`2` 参数错误、输入为空、或没有可处理的抖音/B 站链接。
+- 错误码：`no_input`、`no_url`、`no_douyin_url`、`chrome_launch_failed`、`invalid_url`、`stream_not_found`、`download_failed`、`bilibili_not_logged_in`（B 站 profile 无 SESSDATA）、`bilibili_api_error`（view/playurl 调用失败）、`ffmpeg_merge_failed`（合并失败）、`zhihu_not_logged_in`（知乎 profile 无 `z_c0`）、`zhihu_extract_failed`（正文容器未出现/提取失败，detail 带页面标题与候选区统计）。
+- 退出码：`0` 全部成功；`1` 存在失败项或部分成功；`2` 参数错误、输入为空、或没有可处理的抖音/B 站/知乎链接。
 
 ### 可选参数
 
@@ -99,7 +148,7 @@ JSON 包络（仓库统一约定）：
 | `--debug-port` | `9222` | Chrome CDP 调试端口 |
 | `--profile-dir` | `%APPDATA%\language_projects\douyin_downloader\chrome-profile` | Chrome 专用 Profile |
 | `--chrome` | `C:\Program Files\Google\Chrome\Application\chrome.exe` | Chrome 可执行文件 |
-| `--headed` | 关 | 前台可见窗口模式（人工完成验证滑块 / 首次登录 B 站） |
+| `--headed` | 关 | 前台可见窗口模式（人工完成验证滑块 / 首次登录 B 站与知乎） |
 | `--headless[=MODE]` | `new` | 启动模式：`new`=Chrome 新版无头（默认，屏幕零痕迹）、`old`=旧无头（已被抖音风控识别）、`background`=真 Chrome + 窗口移到屏幕外 |
 | `--close-browser` | 关 | 关闭常驻的自动化 Chrome 实例后退出 |
 | `--json` / `--schema` | 关 | 机器输出 / 契约导出 |
@@ -126,7 +175,8 @@ uv run scripts\build_exe.py --dir        # standalone 文件夹版（启动更�
 | 路径 | 内容 |
 |---|---|
 | `chrome-profile\` | Chrome 专用 Profile（登录态、Cookie、偏好）；其中 `Default\Preferences` 的下载目录指向 `--output-dir` |
-| 下载产物 | 默认 `~/Downloads`（由 `--output-dir` 决定，不属于工具缓存） |
+| 视频产物 | 默认 `~/Downloads`（由 `--output-dir` 决定，不属于工具缓存） |
+| 知乎产物 | `{output_dir}\zhihu\{标题}\`（`article.md` + `images/`，同样由 `--output-dir` 决定） |
 
 历史路径 `C:\Users\29580\.chrome-automation-profile` 已迁移到上表新位置。
 
@@ -135,7 +185,10 @@ uv run scripts\build_exe.py --dir        # standalone 文件夹版（启动更�
 - **Chrome 启动逻辑内嵌在 `start_chrome()` 函数里**：原先的 `start_chrome.ps1` 内容已并入 `douyin_dl.py`，经 `-EncodedCommand`（UTF-16LE + base64）交给 PowerShell 执行，避免中文/引号/空格路径的转义问题；仍走 PowerShell 是因为 `Invoke-CimMethod Win32_Process Create` 属于「创建即返回」的非启动阻塞方式（`&` 调用符会挂住 Python 进程）。
 - **单文件分层**：契约层（错误码/JSON 包络/schema）→ 基础设施层（Chrome/CDP/HTTP/ffmpeg）→ Service 层（提链、归一化、批量编排，不碰标准流）→ CLI 适配层（参数解析、人读/JSON 渲染、退出码映射）。
 - **B 站链路（API + cookie 混合）**：`resolve_bilibili_url` 解析短链/裸 BV 号 → `fetch_bili_view`（标题 + 多 P pages）→ `fetch_bili_playurl`（DASH 流，qn=127 按登录权益下发）→ `pick_bili_streams`（video 取 id 最大档、audio 取首项；老视频无 DASH 时走 durl 单流兼容分支）→ 双流下载（必带 `Referer: https://www.bilibili.com/`，否则 CDN 403）→ `ffmpeg -c copy` 合并。登录态经 CDP `Network.getCookies` 读取（可读 HttpOnly cookie），与抖音共用同一 Profile。
-- **不提供 MCP**：本工具是本地一次性下载动作，没有跨会话的状态查询需求，按《CLI 工具开发标准》§5.5 以 `interface: "cli"` 声明契约（`schema` 导出的是 CLI 契约，不是 MCP 工具目录）。
+- **知乎链路（浏览器渲染 + bs4 + html2text）**：`check_zhihu_login`（CDP 读 `z_c0`）→ `resolve_zhihu_url`（`/answer/<aid>`、`/p/<pid>`）→ `open_tab`（`host_filter=zhihu.com`，与抖音/B 站标签页并存不跨域导航）→ `extract_zhihu_article`（轮询正文容器 `.Post-RichTextContainer` / `.RichContent-inner` / `.RichText`，30s 超时）→ `ZHIHU_EXTRACT_JS`（分段滚动触发懒加载后回顶，返回容器 `innerHTML` + 标题/作者，**不做 DOM→块数组转换**）→ `collect_zhihu_image_urls` + `download_zhihu_images`（`Referer` + cookie，失败不致命）→ `clean_zhihu_html`（剥壳/图注斜体化/图片本地化）→ `render_zhihu_markdown`（html2text `body_width=0`，`ZhihuHtml2Text` 子类修正中文强调标记两侧的多余空格）→ `article.md` 落盘。
+  - 为什么用库而不是手写转换：HTML→Markdown 是成熟问题（表格/实体转义/嵌套引用），手写白名单必然丢内容；JS 端只采集原始 HTML，未知元素由库降级处理。
+  - `ZhihuHtml2Text` 只改两处中文相关行为（强调标记紧贴汉字/中文标点时不补空格、`<em>` 开启时对中文标点不补空格），ASCII 场景仍走 html2text 原逻辑。
+- **不提供 MCP**：本工具是本地一次性下载/提取动作，没有跨会话的状态查询需求，按《CLI 工具开发标准》§5.5 以 `interface: "cli"` 声明契约（`schema` 导出的是 CLI 契约，不是 MCP 工具目录）。
 
 ### 启动模式与「不打扰用户」
 
@@ -168,6 +221,9 @@ uv run scripts\build_exe.py --dir        # standalone 文件夹版（启动更�
 4. **合并依赖 ffmpeg**：抖音 DASH 音视频流与 B 站 DASH 流都靠 `ffmpeg -c copy` 合并（无重编码，秒级完成）；本机 PATH 需有 `ffmpeg`，缺失时按 `ffmpeg_merge_failed` 失败，临时流会自动清理。抖音若始终抓不到音频流，会降级为无声视频并在结果里标 `audio: "missing"`（不伪造成功）。
 5. **Chrome 进程驻留后台**：运行结束后 Chrome 实例不退出（复用登录态与实例，后续运行秒连），属设计行为。结束方式：`--close-browser`（推荐），或任务管理器结束对应 Profile 的 `chrome.exe`。
 6. **短链解析依赖网络**：解析失败的抖音/B 站短链按 `invalid_url` 如实失败（不静默丢弃）。
-7. **抓取依赖 Chrome 与 CDP**：Profile 首次使用或长时间未用后可能需要重新登录/验证（抖音验证滑块、B 站登录各一次）。
+7. **抓取依赖 Chrome 与 CDP**：Profile 首次使用或长时间未用后可能需要重新登录/验证（抖音验证滑块、B 站与知乎登录各一次）。
 8. **需要 Chrome 已安装**在 `--chrome` 指定的路径。
 9. 标题含非法字符时会被替换为 `_`，文件名主干最长 50 字符；B 站多 P 追加 `_P{n}` 后缀。标题轮询取不到时退化为 `douyin_<视频ID>`。
+10. **知乎仅提取 URL 指向的单个回答**：问题页整页多回答、想法（`/pin/`）、收藏夹、评论与赞同数都不提取；正文中的知乎视频、内嵌第三方卡片、外链预览卡会降级为链接或不渲染。
+11. **知乎公式以渲染图片形式保存**（`/equation?tex=...` 经绝对化后按图片下载），不做 LaTeX 还原；知乎改版导致正文容器选择器失效时按 `zhihu_extract_failed` 失败，detail 里带页面标题与候选区统计便于定位。
+12. **知乎提取需登录态**：Profile 无 `z_c0`（未登录或已过期）时整批按 `zhihu_not_logged_in` 失败，`--headed` 重新登录一次即可。

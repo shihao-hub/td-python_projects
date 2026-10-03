@@ -1,11 +1,11 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["websocket-client>=1.8"]
+# dependencies = ["websocket-client>=1.8", "beautifulsoup4>=4.12", "html2text>=2024.2.26"]
 # ///
-"""抖音/B 站视频下载器（uv 单脚本）。
+"""抖音/B 站视频下载器 + 知乎文章提取器（uv 单脚本）。
 
 用法：
-    uv run douyin_dl.py "<含抖音或 B 站链接的文本>" [--json] [--output-dir DIR] [--headed]
+    uv run douyin_dl.py "<含抖音/B 站/知乎链接的文本>" [--json] [--output-dir DIR] [--headed]
     Get-Content 文案.txt -Raw | uv run douyin_dl.py --json
     uv run douyin_dl.py --close-browser     # 关掉常驻的自动化 Chrome
     uv run douyin_dl.py schema              # 导出 CLI 契约 JSON（零业务 I/O）
@@ -22,11 +22,15 @@ B 站：API + 浏览器登录态路线——复用同一 Chrome profile 的 cook
      未登录时按 bilibili_not_logged_in 失败（首次先 --headed 登录一次 bilibili.com）；
      DASH 音视频分离流经 ffmpeg -c copy 合并，需本机已安装 ffmpeg。
 支持裸 BV 号（BV+10 位字母数字）、b23.tv 短链、bilibili.com 链接、多 P（?p=N 或全量下载）。
+知乎：真实浏览器 + 登录态打开页面，把回答 / 专栏文章正文原封不动提取为 Markdown + 本地原图
+      （`{output_dir}/zhihu/{标题}/article.md` 与 `images/`）。登录态关键 cookie `z_c0` 为
+      HttpOnly，只能经 CDP 读取；未登录时按 zhihu_not_logged_in 失败（首次先 --headed 登录
+      一次 zhihu.com）。只支持回答（/question/<qid>/answer/<aid>）与专栏文章（/p/<pid>）。
 
 分层（单文件内，遵循《CLI 工具开发标准》的 Service 核心 + 薄壳原则）：
     - 契约层：错误码、JSON 包络、schema 定义（不导入任何业务依赖）
     - 基础设施层：Chrome 启动、CDP 调用、HTTP 下载、ffmpeg 合并（唯一接触外部资源的地方）
-    - Service 层：文本提链、链接归一化、批量下载编排（不读写标准流、不退出进程）
+    - Service 层：文本提链、链接归一化、批量下载/提取编排（不读写标准流、不退出进程）
     - CLI 适配层：参数解析、人读/JSON 渲染、退出码映射
 """
 
@@ -34,9 +38,11 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -46,9 +52,11 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
+import html2text
 import websocket
+from bs4 import BeautifulSoup
 
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 PROG = "douyin_dl"
 # 项目目录名（monorepo 目录名）用下划线，与 CLI 程序名 PROG 区分
 PROJECT_DIR_NAME = "douyin_downloader"
@@ -79,14 +87,16 @@ USER_AGENT = (
 ERROR_MESSAGES = {
     "no_input": "输入为空，请传入文本参数或通过管道提供内容",
     "no_url": "输入文本中未发现任何链接",
-    "no_douyin_url": "输入文本中没有抖音/B 站链接，全部已跳过",
+    "no_douyin_url": "输入文本中没有抖音/B 站/知乎链接，全部已跳过",
     "chrome_launch_failed": "Chrome 启动失败",
-    "invalid_url": "抖音链接非法或短链解析失败，未能得到视频 ID",
+    "invalid_url": "链接非法或短链解析失败，未能得到视频/文章 ID",
     "stream_not_found": "未能在页面中捕获视频流（可能需要人工完成验证）",
     "download_failed": "视频流下载失败",
     "bilibili_not_logged_in": "B 站未登录：加 --headed 运行，在弹出的 Chrome 窗口中登录 bilibili.com 后重跑",
     "bilibili_api_error": "B 站接口调用失败",
     "ffmpeg_merge_failed": "音视频合并失败（ffmpeg）",
+    "zhihu_not_logged_in": "知乎未登录：加 --headed 运行，在弹出的 Chrome 窗口中登录 zhihu.com 后重跑",
+    "zhihu_extract_failed": "知乎正文提取失败（页面结构可能已改版）",
 }
 
 
@@ -116,8 +126,19 @@ def _schema_text_property() -> dict[str, Any]:
         "type": "string",
         "minLength": 1,
         "maxLength": 100000,
-        "description": "含抖音/B 站链接（或裸 BV 号）的文本，可包含多个链接与无关文案",
+        "description": "含抖音/B 站/知乎链接（或裸 BV 号）的文本，可包含多个链接与无关文案",
     }
+
+
+def _schema_error_property() -> dict[str, Any]:
+    return _obj(
+        {
+            "code": {"type": "string", "enum": sorted(ERROR_MESSAGES)},
+            "message": {"type": "string"},
+            "detail": {"type": "string"},
+        },
+        required=["code", "message"],
+    )
 
 
 def _schema_response_property() -> dict[str, Any]:
@@ -139,16 +160,36 @@ def _schema_response_property() -> dict[str, Any]:
                     "元素兜底、与 DASH 音频不同源而被放弃配对），已降级为无声视频"
                 ),
             },
-            "error": _obj(
-                {
-                    "code": {"type": "string", "enum": sorted(ERROR_MESSAGES)},
-                    "message": {"type": "string"},
-                    "detail": {"type": "string"},
-                },
-                required=["code", "message"],
-            ),
+            "error": _schema_error_property(),
         },
         required=["input_url", "video_url", "video_id", "ok", "title", "path", "bytes"],
+    )
+    extract_item = _obj(
+        {
+            "input_url": {"type": "string", "description": "文本中提取到的原始知乎链接"},
+            "article_url": {"type": "string", "description": "归一化后的知乎页面地址；失败时为空串"},
+            "article_id": {"type": "string", "description": "回答 ID（answer/<aid>）或专栏文章 ID（/p/<pid>）；失败时为空串"},
+            "ok": {"type": "boolean"},
+            "title": {"type": "string", "description": "文章标题清洗后的目录名主干"},
+            "path": {"type": "string", "description": "article.md 落盘绝对路径；失败时为空串"},
+            "images_total": {"type": "integer", "minimum": 0, "description": "正文中去重后的图片总数"},
+            "images_failed": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "原图下载失败的张数（不致命，Markdown 中保留原始 URL 引用）",
+            },
+            "error": _schema_error_property(),
+        },
+        required=[
+            "input_url",
+            "article_url",
+            "article_id",
+            "ok",
+            "title",
+            "path",
+            "images_total",
+            "images_failed",
+        ],
     )
     skipped = _obj(
         {
@@ -160,31 +201,30 @@ def _schema_response_property() -> dict[str, Any]:
     data = _obj(
         {
             "downloaded": {"type": "array", "items": item},
+            "extracted": {
+                "type": "array",
+                "items": extract_item,
+                "description": "知乎回答/专栏文章的提取结果（每篇一条记录）",
+            },
             "skipped": {"type": "array", "items": skipped},
             "summary": _obj(
                 {
-                    "total": {"type": "integer", "minimum": 0},
+                    "total": {"type": "integer", "minimum": 0, "description": "视频下载记录条数"},
                     "succeeded": {"type": "integer", "minimum": 0},
                     "failed": {"type": "integer", "minimum": 0},
                     "skipped": {"type": "integer", "minimum": 0},
+                    "extracted": {"type": "integer", "minimum": 0, "description": "知乎提取记录条数"},
                 },
-                required=["total", "succeeded", "failed", "skipped"],
+                required=["total", "succeeded", "failed", "skipped", "extracted"],
             ),
         },
-        required=["downloaded", "skipped", "summary"],
+        required=["downloaded", "extracted", "skipped", "summary"],
     )
     return _obj(
         {
             "ok": {"type": "boolean"},
             "data": data,
-            "error": _obj(
-                {
-                    "code": {"type": "string", "enum": sorted(ERROR_MESSAGES)},
-                    "message": {"type": "string"},
-                    "detail": {"type": "string"},
-                },
-                required=["code", "message"],
-            ),
+            "error": _schema_error_property(),
         },
         required=["ok", "data"],
     )
@@ -203,11 +243,11 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
         "name": PROG,
         "version": VERSION,
         "interface": "cli",
-        "description": "从一段文本中提取抖音/B 站视频链接，经 Chrome CDP 捕获无水印视频流并下载到本地；B 站走 API + 浏览器登录态（cookie）路线",
+        "description": "从一段文本中提取抖音/B 站视频链接与知乎回答/专栏文章链接：抖音经 Chrome CDP 捕获无水印视频流并下载，B 站走 API + 浏览器登录态（cookie）路线，知乎经真实浏览器 + 登录态把正文原封不动提取为 Markdown + 本地原图",
         "commands": [
             {
                 "name": PROG,
-                "summary": "提取文本中的抖音/B 站链接并下载（串行逐个处理，按域名自动分流；不支持的链接跳过）",
+                "summary": "提取文本中的抖音/B 站链接并下载、知乎链接提取为 Markdown（串行逐个处理，按域名自动分流；不支持的链接跳过）",
                 "input": {
                     "text": {
                         "type": "array",
@@ -221,7 +261,7 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                         "debug_port": {"type": "integer", "default": resolved["debug_port"], "description": "Chrome CDP 端口"},
                         "profile_dir": {"type": "string", "default": "", "description": "Chrome 专用 Profile 目录，空表示使用默认数据目录"},
                         "chrome": {"type": "string", "default": resolved["chrome"], "description": "Chrome 可执行文件路径"},
-                        "headed": {"type": "boolean", "default": False, "description": "前台可见窗口模式（人工完成验证滑块 / 首次登录 B 站）"},
+                        "headed": {"type": "boolean", "default": False, "description": "前台可见窗口模式（人工完成验证滑块 / 首次登录 B 站与知乎）"},
                         "headless": {
                             "type": "string",
                             "enum": ["new", "old", "background"],
@@ -238,15 +278,15 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                     "failure": {"ok": False, "error": "<Error>", "data": "<OutputData，可能为空集合>"},
                 },
                 "exit_codes": {
-                    "0": "全部链接下载成功",
+                    "0": "全部链接处理成功",
                     "1": "存在失败项或部分成功",
-                    "2": "调用参数错误，或未发现可处理的抖音链接",
+                    "2": "调用参数错误，或未发现可处理的抖音/B 站/知乎链接",
                 },
                 "constraints": [
                     "处理串行执行，复用同一个 Chrome 与标签页",
                     "Chrome 默认以 headless-new 模式启动（Chrome 新版无头，实测可过抖音风控且屏幕上无窗口、无任务栏图标）",
                     "headless-new 下某条 stream_not_found 时，整批抖音链接会自动改用 background 模式重试一遍；旧无头 --headless=old 是显式选择，不自动回退",
-                    "background 模式为真 Chrome + 窗口移到屏幕外 + 静音，因此屏幕上看不到也不外放声音；--headed 为前台可见窗口（人工过验证滑块 / 登录 B 站）",
+                    "background 模式为真 Chrome + 窗口移到屏幕外 + 静音，因此屏幕上看不到也不外放声音；--headed 为前台可见窗口（人工过验证滑块 / 登录 B 站与知乎）",
                     "单条失败不中断整批，结果中逐条给出结构化错误",
                     "需要人工完成抖音验证滑块时该条失败，用 --headed 重跑后人工处理",
                     "抖音为 DASH 音视频分离流，下载前按时间轴对齐（ffprobe 取 min 时长后 -t 裁齐，避免尾部静音/冻结帧），经 ffmpeg -c copy 合并；未捕获到音频流时降级为无声视频并在 audio 字段标记 missing",
@@ -255,16 +295,24 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                     "B 站链接复用同一 Chrome profile 的登录态（SESSDATA），未登录时该批按 bilibili_not_logged_in 失败；首次使用先 --headed 登录一次 bilibili.com",
                     "B 站视频为 DASH 音视频分离流，下载后经 ffmpeg -c copy 合并，需本机已安装 ffmpeg",
                     "裸 BV 号（BV+10 位字母数字）与 b23.tv 短链、bilibili.com 链接等效支持",
+                    "知乎链接只支持回答（/question/<qid>/answer/<aid>）与专栏文章（/p/<pid>）两类，其余知乎链接（想法/收藏夹/问题页等）按 invalid_url 失败",
+                    "知乎提取复用同一 Chrome profile 的登录态（关键 cookie z_c0 为 HttpOnly，只能经 CDP 读取），未登录时该批按 zhihu_not_logged_in 失败；首次使用先 --headed 登录一次 zhihu.com",
+                    "知乎每篇文章一个独立目录 {output_dir}/zhihu/{标题}/，内含 article.md 与 images/（原图下载，命名 image_001 起）；同名目录自动加 _1、_2 后缀，不覆盖既有产物",
+                    "知乎正文图片下载失败不致命：该图在 Markdown 中保留原始 URL 引用，失败张数记入 images_failed",
                     "Chrome 实例运行结束后常驻不退出（复用登录态，后续运行秒连）；用 --close-browser 显式收尾",
                 ],
             }
         ],
         "side_effects": {
-            "filesystem": [resolved["output_dir"]],
+            "filesystem": [resolved["output_dir"], os.path.join(resolved["output_dir"], "zhihu")],
             "process": [
                 "Chrome（独立 Profile + CDP 调试端口，默认 headless-new；回退或显式指定时为 background：真浏览器 + 窗口移到屏幕外）"
             ],
-            "network": ["抖音页面与 douyinvod.com 音视频流", "B 站 API（api.bilibili.com）与 bilivideo CDN 音视频流"],
+            "network": [
+                "抖音页面与 douyinvod.com 音视频流",
+                "B 站 API（api.bilibili.com）与 bilivideo CDN 音视频流",
+                "知乎页面（www.zhihu.com / zhuanlan.zhihu.com）与 zhimg.com 图片 CDN",
+            ],
         },
         "not_provided": {
             "mcp": "本工具为本地一次性下载动作，无跨会话状态查询需求，按标准 §5.5 以 interface=cli 声明契约",
@@ -818,6 +866,33 @@ def http_get_json(url: str, headers: dict[str, str]) -> dict[str, Any]:
         return json.load(resp)
 
 
+def http_get_bytes(url: str, headers: dict[str, str]) -> bytes:
+    """带自定义请求头 GET 并返回原始字节（图片等小文件用）。
+
+    非 2xx 由 urllib 抛 HTTPError；不打印进度（与 download_stream 的区别）。
+    """
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read()
+
+
+def unique_dir(parent: str, stem: str) -> str:
+    """生成并创建不覆盖既有目录的文章目录（冲突时追加 _1、_2 …），返回其路径。
+
+    与 unique_path 同款防覆盖策略，差别只在唯一化对象是**目录名**（知乎每篇文章一个目录，
+    目录内文件名固定为 article.md / images/image_00N.ext，不再逐文件去重）。
+    目录本身在这里创建：正文无图时也要能落盘 article.md（不能依赖图片目录的创建）。
+    """
+    os.makedirs(parent, exist_ok=True)
+    candidate = os.path.join(parent, stem)
+    index = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(parent, f"{stem}_{index}")
+        index += 1
+    os.makedirs(candidate, exist_ok=True)
+    return candidate
+
+
 def unique_path(directory: str, stem: str, suffix: str = ".mp4") -> str:
     """生成不覆盖既有文件的输出路径（冲突时追加 _1、_2 …）。
 
@@ -970,6 +1045,7 @@ _URL_RE = re.compile(r"""https?://[^\s<>"'`（）()【】\[\]{}，。；、]+"""
 _TRAILING = "\"'`.,;:!?，。；：！？、）)】」》>"
 _DOUYIN_HOSTS = ("douyin.com", "iesdouyin.com")
 _BILI_HOSTS = ("bilibili.com", "b23.tv")
+_ZHIHU_HOSTS = ("zhihu.com",)
 _BV_RE = re.compile(r"\bBV[0-9A-Za-z]{10}\b")
 
 
@@ -983,6 +1059,7 @@ class SkippedLink:
 class ExtractResult:
     douyin: list[str] = field(default_factory=list)
     bilibili: list[str] = field(default_factory=list)
+    zhihu: list[str] = field(default_factory=list)
     skipped: list[SkippedLink] = field(default_factory=list)
 
 
@@ -1022,8 +1099,45 @@ class DownloadRecord:
 
 
 @dataclass
+class ExtractRecord:
+    """单篇知乎文章的提取结果（成功或结构化失败）。"""
+
+    input_url: str
+    ok: bool
+    article_url: str = ""
+    article_id: str = ""
+    title: str = ""
+    path: str = ""
+    images_total: int = 0
+    images_failed: int = 0
+    error_code: str = ""
+    error_message: str = ""
+    error_detail: str = ""
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "input_url": self.input_url,
+            "article_url": self.article_url,
+            "article_id": self.article_id,
+            "ok": self.ok,
+            "title": self.title,
+            "path": self.path,
+            "images_total": self.images_total,
+            "images_failed": self.images_failed,
+        }
+        if not self.ok:
+            payload["error"] = {
+                "code": self.error_code,
+                "message": self.error_message,
+                "detail": self.error_detail,
+            }
+        return payload
+
+
+@dataclass
 class RunResult:
     records: list[DownloadRecord] = field(default_factory=list)
+    extracted: list[ExtractRecord] = field(default_factory=list)
     skipped: list[SkippedLink] = field(default_factory=list)
 
     @property
@@ -1034,15 +1148,25 @@ class RunResult:
     def failed(self) -> int:
         return sum(1 for r in self.records if not r.ok)
 
+    @property
+    def extracted_succeeded(self) -> int:
+        return sum(1 for r in self.extracted if r.ok)
+
+    @property
+    def extracted_failed(self) -> int:
+        return sum(1 for r in self.extracted if not r.ok)
+
     def to_data(self) -> dict[str, Any]:
         return {
             "downloaded": [r.to_json() for r in self.records],
+            "extracted": [r.to_json() for r in self.extracted],
             "skipped": [{"url": s.url, "reason": s.reason} for s in self.skipped],
             "summary": {
                 "total": len(self.records),
                 "succeeded": self.succeeded,
                 "failed": self.failed,
                 "skipped": len(self.skipped),
+                "extracted": len(self.extracted),
             },
         }
 
@@ -1063,8 +1187,17 @@ def is_bilibili_url(url: str) -> bool:
     return any(host == base or host.endswith("." + base) for base in _BILI_HOSTS)
 
 
+def is_zhihu_url(url: str) -> bool:
+    """zhihu.com 域判断：www / zhuanlan / 裸域均命中，模式与 is_bilibili_url 一致。"""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    host = host.lower().lstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return any(host == base or host.endswith("." + base) for base in _ZHIHU_HOSTS)
+
+
 def extract_links(text: str) -> ExtractResult:
-    """从任意文本中提取链接：抖音/B 站链接按出现顺序去重收集，其余记为 skipped。
+    """从任意文本中提取链接：抖音/B 站/知乎链接按出现顺序去重收集，其余记为 skipped。
 
     文本中的裸 BV 号（不在任何已收集 URL 内）归一化为 B 站视频页地址后进入 bilibili 队列。
     """
@@ -1081,6 +1214,8 @@ def extract_links(text: str) -> ExtractResult:
             result.douyin.append(url)
         elif is_bilibili_url(url):
             result.bilibili.append(url)
+        elif is_zhihu_url(url):
+            result.zhihu.append(url)
         else:
             result.skipped.append(SkippedLink(url=url, reason="not_supported"))
 
@@ -1501,6 +1636,506 @@ def download_bilibili_one(
         ]
 
 
+# ------------------------- 知乎 Service -------------------------
+
+_ZHIHU_BASE = "https://www.zhihu.com"
+_ZHIHU_REFERER = "https://www.zhihu.com/"
+# 正文容器候选（新版专栏/回答 → 老版回答 → 通用富文本），按顺序取第一个非空容器
+ZHIHU_CONTAINER_SELECTORS = (".Post-RichTextContainer", ".RichContent-inner", ".RichText")
+_ZHIHU_SELECTORS_JS = json.dumps(list(ZHIHU_CONTAINER_SELECTORS))
+
+# 正文容器内的无关壳元素（互动条、广告、图标等）：DOM→Markdown 前先剥掉，避免把
+# 「赞同/评论/收起」这类按钮文字混进正文
+_ZHIHU_STRIP_SELECTORS = (
+    "script",
+    "style",
+    "noscript",
+    "button",
+    "iframe",
+    "svg",
+    ".ContentItem-actions",
+    ".RichContent-actions",
+    ".Post-Sub",
+    ".RichText-ad",
+    ".Advertisement",
+    ".VoteButton",
+    ".Reward",
+    ".FollowButton",
+    ".ContentItem-time",
+)
+
+# 图片原图候选属性，优先级从左到右（data-original 常是小图缩略版，故 data-actualsrc 优先）
+_ZHIHU_IMAGE_ATTRS = ("data-actualsrc", "data-original", "srcset", "src")
+_ZHIHU_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+_ZHIHU_DEFAULT_IMAGE_SUFFIX = ".jpg"
+
+# 正文容器出现与否的探测脚本（诊断信息随结果带回，便于定位知乎改版；href 用于复核落点）
+_ZHIHU_PROBE_TEMPLATE = """
+(() => {
+  const sels = __SELECTORS__;
+  const stats = [];
+  let chosen = null;
+  for (const sel of sels) {
+    const nodes = Array.from(document.querySelectorAll(sel));
+    const nonEmpty = nodes.filter((n) => (n.innerText || '').trim().length > 0);
+    stats.push({ selector: sel, matched: nodes.length, nonEmpty: nonEmpty.length });
+    if (!chosen && nonEmpty.length) chosen = sel;
+  }
+  return JSON.stringify({ found: !!chosen, selector: chosen, title: document.title || '',
+                          href: document.location.href, stats: stats });
+})()
+"""
+
+# 正文提取脚本：只负责「滚动触发懒加载 + 取容器 innerHTML」，DOM→Markdown 交给 bs4 + html2text。
+# 必须返回 Promise（eval_cdp 用 awaitPromise 等待分段滚动结束）。
+# 滚动阶段用**时间预算**而非固定步数：图片多的长文页面高度会随懒加载不断增长，后台标签页的
+# 定时器还会被 Chrome 节流（setTimeout 最小 1s），固定步数会把 CDP 调用拖到超时。
+_ZHIHU_EXTRACT_TEMPLATE = """
+(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const sels = __SELECTORS__;
+  const pick = () => {
+    for (const sel of sels) {
+      const nodes = Array.from(document.querySelectorAll(sel))
+        .filter((node) => (node.innerText || '').trim().length > 0);
+      if (nodes.length) return nodes[0];
+    }
+    return null;
+  };
+  const pageHeight = () => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+  // 知乎正文图片是懒加载：不滚到底，img 的 src 仍是占位图（data-actualsrc 一般已在初始 HTML 里）
+  const deadline = Date.now() + __SCROLL_BUDGET_MS__;
+  let lastY = -1;
+  while (Date.now() < deadline) {
+    if (window.scrollY + window.innerHeight >= pageHeight() - 4) break;
+    window.scrollTo(0, window.scrollY + Math.max(400, Math.floor(window.innerHeight * 0.9)));
+    await sleep(__SCROLL_STEP_MS__);
+    if (window.scrollY === lastY) break;  // 滚不动（滚动容器不是 window / 已到底）：不再空转
+    lastY = window.scrollY;
+  }
+  window.scrollTo(0, 0);
+  await sleep(200);
+  const node = pick();
+  if (!node) {
+    return JSON.stringify({ found: false, title: document.title || '', author: '', html: '' });
+  }
+  const authorNode = document.querySelector('.AuthorInfo-name, .Post-Author .AuthorInfo-name');
+  return JSON.stringify({
+    found: true,
+    title: document.title || '',
+    author: authorNode ? (authorNode.innerText || '').trim() : '',
+    html: node.innerHTML,
+  });
+})()
+"""
+
+_ZHIHU_PROBE_JS = _ZHIHU_PROBE_TEMPLATE.replace("__SELECTORS__", _ZHIHU_SELECTORS_JS)
+ZHIHU_EXTRACT_JS = (
+    _ZHIHU_EXTRACT_TEMPLATE.replace("__SELECTORS__", _ZHIHU_SELECTORS_JS)
+    .replace("__SCROLL_BUDGET_MS__", "20000")
+    .replace("__SCROLL_STEP_MS__", "250")
+)
+
+ZHIHU_CONTAINER_ATTEMPTS = 30  # 正文容器轮询次数（1s 间隔 → 30s 超时）
+ZHIHU_CONTAINER_INTERVAL = 1.0
+# 分段滚动 20s 预算 + 回顶/取 HTML 余量，给到 120s；超时说明页面异常（长文/后台节流），
+# 由 extract_zhihu_article 转成带诊断的 zhihu_extract_failed
+ZHIHU_EXTRACT_TIMEOUT = 120.0
+
+
+def resolve_zhihu_url(url: str) -> tuple[str, str]:
+    """归一化知乎输入：回答取 aid、专栏文章取 pid 作为 article_id。
+
+    知乎没有短链形态，不需要跟随重定向，article_url 即原 URL；两类之外的知乎链接
+    （想法 /pin/、收藏夹、问题页、个人主页等）按 invalid_url 失败。
+    """
+    match = re.search(r"/answer/(\d+)", url) or re.search(r"/p/(\d+)", url)
+    if not match:
+        raise AppError(
+            "invalid_url",
+            ERROR_MESSAGES["invalid_url"],
+            f"仅支持回答（/question/<qid>/answer/<aid>）与专栏文章（/p/<pid>）: {url}",
+        )
+    return url, match.group(1)
+
+
+def zhihu_cookies(port: int) -> dict[str, str]:
+    """读知乎域 cookie（含 HttpOnly 的 z_c0）；读取失败返回空字典，由调用方转结构化错误。"""
+    try:
+        return cdp_get_cookies(port, _ZHIHU_BASE)
+    except Exception:
+        return {}
+
+
+def check_zhihu_login(port: int) -> bool:
+    """登录门：z_c0 存在即已登录（知乎登录态关键 cookie，HttpOnly，只能经 CDP 读取）。"""
+    return bool(zhihu_cookies(port).get("z_c0"))
+
+
+def zhihu_headers(cookie_header: str = "") -> dict[str, str]:
+    """知乎图片下载请求头（Referer 必带，zhimg 图片 CDN 校验来源）。"""
+    headers = {"User-Agent": USER_AGENT, "Referer": _ZHIHU_REFERER}
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+    return headers
+
+
+# 知乎在有未读消息时会把计数写进 document.title（形如「(11 条消息) 标题」），
+# 这是站点自己加的运行期前缀，不属于文章标题，落盘前必须剥掉
+_ZHIHU_TITLE_PREFIX_RE = re.compile(r"^\(\s*\d+\s*条消息\s*\)\s*")
+
+
+def clean_zhihu_title(title: str) -> str:
+    """清洗知乎页面标题：剥掉「(N 条消息)」未读计数前缀与末尾「 - 知乎」站点后缀。"""
+    cleaned = _ZHIHU_TITLE_PREFIX_RE.sub("", (title or "").strip())
+    return re.sub(r"\s*[-–—|]\s*知乎\s*$", "", cleaned).strip()
+
+
+def _srcset_best(value: str) -> str:
+    """从 srcset 里挑清晰度最高的候选（2x 像素密度按 ×1000 折算，优先级高于 1440w）。"""
+    best_url = ""
+    best_score = -1.0
+    for part in (value or "").split(","):
+        fields = part.strip().split()
+        if not fields or not fields[0]:
+            continue
+        score = 1.0
+        if len(fields) > 1:
+            descriptor = fields[1].strip().lower()
+            try:
+                if descriptor.endswith("w"):
+                    score = float(descriptor[:-1])
+                elif descriptor.endswith("x"):
+                    score = float(descriptor[:-1]) * 1000
+            except ValueError:
+                score = 1.0
+        if score > best_score:
+            best_url, best_score = fields[0], score
+    return best_url
+
+
+def _zhihu_image_url(tag: Any) -> str:
+    """按 data-actualsrc → data-original → srcset 最大候选 → src 取原图 URL 并绝对化。
+
+    知乎公式图的 src 是相对路径（/equation?tex=...），必须绝对化后才能下载；
+    data: 开头的占位图（内联 svg / 1x1 gif）一律跳过。
+    """
+    candidates: list[str] = []
+    for attr in ("data-actualsrc", "data-original"):
+        value = (tag.get(attr) or "").strip()
+        if value:
+            candidates.append(value)
+    srcset = _srcset_best(tag.get("srcset") or "")
+    if srcset:
+        candidates.append(srcset)
+    src = (tag.get("src") or "").strip()
+    if src:
+        candidates.append(src)
+    for value in candidates:
+        if value.startswith("data:"):
+            continue
+        absolute = urllib.parse.urljoin(_ZHIHU_BASE, value)
+        if absolute.startswith("http"):
+            return absolute
+    return ""
+
+
+def collect_zhihu_image_urls(html: str) -> list[str]:
+    """提取正文 HTML 里的原图 URL 清单（绝对化 + 去重，保持出现顺序）。"""
+    soup = BeautifulSoup(html or "", "html.parser")
+    urls: list[str] = []
+    seen: set[str] = set()
+    for tag in soup.find_all("img"):
+        url = _zhihu_image_url(tag)
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def _image_suffix(url: str) -> str:
+    """从 URL 路径推断图片扩展名，白名单外一律 .jpg（含知乎公式 /equation?tex= 这类无后缀 URL）。"""
+    path = urllib.parse.urlsplit(url).path.lower()
+    for suffix in _ZHIHU_IMAGE_SUFFIXES:
+        if path.endswith(suffix):
+            return suffix
+    return _ZHIHU_DEFAULT_IMAGE_SUFFIX
+
+
+def download_zhihu_images(
+    image_urls: list[str],
+    images_dir: str,
+    cookie_header: str,
+    emit: Callable[[str], None] = lambda _msg: None,
+) -> dict[str, str]:
+    """下载正文原图到 images_dir，返回「绝对 URL → 本地文件名」映射。
+
+    命名按出现顺序 image_001.ext 起（编号含失败项，保证同一 URL 始终对应同一编号）；
+    单张失败不致命：捕获后该 URL 不进入映射，Markdown 中会保留其原始 URL 引用。
+    """
+    mapping: dict[str, str] = {}
+    if not image_urls:
+        return mapping
+    os.makedirs(images_dir, exist_ok=True)
+    headers = zhihu_headers(cookie_header)
+    for index, url in enumerate(image_urls, start=1):
+        filename = f"image_{index:03d}{_image_suffix(url)}"
+        try:
+            data = http_get_bytes(url, headers)
+            if not data:
+                raise OSError("响应为空")
+            with open(os.path.join(images_dir, filename), "wb") as fh:
+                fh.write(data)
+        except Exception as exc:
+            emit(f"[!] 图片下载失败（{url[:100]}）：{type(exc).__name__}: {exc}，保留原始 URL 引用")
+            continue
+        mapping[url] = filename
+    return mapping
+
+
+def clean_zhihu_html(html: str, images_map: dict[str, str]) -> str:
+    """把知乎正文 HTML 清洗成可转换形态：剥壳 → 图注斜体化 → 图片本地化。
+
+    images_map 命中时 src 换成相对路径 images/image_00N.ext（与 article.md 同级）；
+    未命中（下载失败）时保留绝对原图 URL；无有效 URL 的占位图整段丢弃。
+    """
+    soup = BeautifulSoup(html or "", "html.parser")
+    for selector in _ZHIHU_STRIP_SELECTORS:
+        for node in soup.select(selector):
+            node.decompose()
+    for caption in soup.select("figcaption"):
+        text = caption.get_text(" ", strip=True)
+        caption.name = "p"
+        caption.clear()
+        emphasis = soup.new_tag("em")
+        emphasis.string = text
+        caption.append(emphasis)
+    for index, tag in enumerate(soup.find_all("img"), start=1):
+        url = _zhihu_image_url(tag)
+        for attr in _ZHIHU_IMAGE_ATTRS + (
+            "class",
+            "loading",
+            "data-rawwidth",
+            "data-rawheight",
+            "data-caption",
+            "data-size",
+        ):
+            if tag.has_attr(attr):
+                del tag[attr]
+        local = images_map.get(url, "")
+        if local:
+            tag["src"] = f"images/{local}"
+        elif url:
+            tag["src"] = url
+        else:
+            tag.decompose()  # 纯占位图（data: URL）：无内容可保留
+            continue
+        if not (tag.get("alt") or "").strip():
+            tag["alt"] = f"图{index}"
+    return str(soup)
+
+
+# html2text 有两处「英文向」的补空格启发式，对中文会产出与网页不一致的空格：
+#   ① 开 <em>/<i> 时，前一字符既非空白也非 **ASCII** 标点就补空格（中文标点不在
+#      string.punctuation 里，「、」后也被补）；
+#   ② </em>/</strong> 后，下一字符不属于「][(){} 空白 .!?」就补空格（汉字/中文标点命中）。
+# 两处只对英文成立——中文里 * 可以紧贴汉字开闭强调。下面的子类按「相邻字符是否汉字/中文
+# 标点」精准跳过，ASCII 场景仍走父类原逻辑（不改变英文转换行为）。
+_CJK_CHAR_RE = re.compile(
+    r"[\u2018\u2019\u201c\u201d\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]"
+)
+
+
+class ZhihuHtml2Text(html2text.HTML2Text):
+    """html2text 的中文修正版：强调标记紧贴汉字/中文标点时不补多余空格。"""
+
+    def handle_tag(self, tag: str, attrs: dict[str, str], start: bool) -> None:
+        if (
+            tag in ("em", "i", "u")
+            and start
+            and self.preceding_data
+            and _CJK_CHAR_RE.match(self.preceding_data[-1])
+        ):
+            # 末尾字符是汉字/中文标点 → HTML 里本就没有空格（真有空格时末尾是空白，
+            # 父类也不会补），故临时改成 ASCII 标点让父类判定「前面是标点」而不补空格
+            original = self.preceding_data
+            self.preceding_data = original[:-1] + "."
+            try:
+                super().handle_tag(tag, attrs, start)
+            finally:
+                self.preceding_data = original
+            return
+        super().handle_tag(tag, attrs, start)
+
+    def handle_data(self, data: str, entity_char: bool = False) -> None:
+        if self.preceding_stressed and data and _CJK_CHAR_RE.match(data[0]):
+            self.preceding_stressed = False  # 走「不补空格」分支，由父类照常输出文本
+        super().handle_data(data, entity_char)
+
+
+def render_zhihu_markdown(
+    title: str,
+    author: str,
+    article_url: str,
+    clean_html: str,
+    fetched_at: str,
+) -> str:
+    """清洗后 HTML → Markdown 文本（html2text），附标题与来源元信息引用块。"""
+    converter = ZhihuHtml2Text()
+    converter.body_width = 0  # 不按宽度硬换行，否则中文段落会被拦腰截断
+    converter.ignore_images = False  # 图片保留为 ![alt](images/image_00N.ext)
+    converter.ignore_emphasis = False
+    # 强调标记用 *：CommonMark 下 _ 夹在中文之间不生效（中文属「词内」，_ 不能开闭强调），
+    # 知乎正文的中文斜体/加粗必须用 * 才能被正确渲染
+    converter.emphasis_mark = "*"
+    # single_line_break 保持默认 False：<p>/<div> 之间的空行即段落分隔，中文分段靠它保住
+    converter.unicode_snob = True  # 保留中文标点原字符，不做 ASCII 近似替换
+    body = re.sub(r"\n{3,}", "\n\n", converter.handle(clean_html or "")).strip()
+    header = "\n".join(
+        [
+            f"# {title}",
+            "",
+            f"> 来源: {article_url}",
+            f"> 作者: {author or '未知'}",
+            f"> 提取时间: {fetched_at}",
+        ]
+    )
+    return f"{header}\n\n{body}\n" if body else f"{header}\n"
+
+
+def extract_zhihu_article(ws_url: str, url: str, article_id: str) -> tuple[str, str, str]:
+    """导航到知乎页面并提取正文，返回 (标题, 作者, 正文 HTML)。
+
+    轮询正文容器就绪（30 × 1s）→ 执行 ZHIHU_EXTRACT_JS（滚动懒加载后取 innerHTML）。
+    容器始终不出现时抛 zhihu_extract_failed，detail 带页面标题与候选区统计，便于定位知乎改版。
+    标题取不到时留空，由调用方以 article_id 兜底；作者缺失不致命。
+    """
+    navigate_page(ws_url, url)
+    probe: dict[str, Any] = {}
+    for _ in range(ZHIHU_CONTAINER_ATTEMPTS):
+        try:
+            raw = eval_cdp(ws_url, _ZHIHU_PROBE_JS)
+            probe = json.loads(raw) if isinstance(raw, str) and raw else {}
+        except Exception as exc:
+            probe = {"error": f"{type(exc).__name__}: {exc}"}
+        if probe.get("found"):
+            break
+        time.sleep(ZHIHU_CONTAINER_INTERVAL)
+    else:
+        detail = (
+            f"页面标题: {probe.get('title') or '(空)'}；"
+            f"正文候选区统计: {json.dumps(probe.get('stats') or [], ensure_ascii=False)}"
+        )
+        if probe.get("error"):
+            detail += f"；探测异常: {probe['error']}"
+        raise AppError("zhihu_extract_failed", ERROR_MESSAGES["zhihu_extract_failed"], detail)
+
+    # 不存在的回答/文章会被知乎重定向（如 /p/1 → 首页），而首页里也有别处的 .RichText：
+    # 只认「容器存在」会「提取成功」出一段无关内容，故按落点 URL 里的 article_id 复核。
+    href = str(probe.get("href") or "")
+    if href and not re.search(rf"/(?:answer|p)/{re.escape(article_id)}(?:\D|$)", href):
+        raise AppError(
+            "zhihu_extract_failed",
+            ERROR_MESSAGES["zhihu_extract_failed"],
+            f"页面已重定向到 {href}（未包含目标文章 ID {article_id}），该链接可能已失效",
+        )
+
+    try:
+        raw = eval_cdp(ws_url, ZHIHU_EXTRACT_JS, timeout=ZHIHU_EXTRACT_TIMEOUT)
+    except Exception as exc:
+        raise AppError(
+            "zhihu_extract_failed",
+            ERROR_MESSAGES["zhihu_extract_failed"],
+            f"提取脚本执行失败（{type(exc).__name__}: {exc}）；"
+            f"页面标题: {probe.get('title') or '(空)'}；命中容器: {probe.get('selector') or '(无)'}",
+        ) from exc
+    payload = json.loads(raw) if isinstance(raw, str) and raw else {}
+    if not payload.get("found"):
+        raise AppError(
+            "zhihu_extract_failed",
+            ERROR_MESSAGES["zhihu_extract_failed"],
+            f"提取阶段正文容器消失；页面标题: {payload.get('title') or probe.get('title') or '(空)'}",
+        )
+    title = clean_zhihu_title(page_title(ws_url)) or clean_zhihu_title(str(payload.get("title") or ""))
+    author = str(payload.get("author") or "").strip()
+    return title, author, str(payload.get("html") or "")
+
+
+def extract_zhihu_one(
+    input_url: str,
+    *,
+    output_dir: str,
+    port: int,
+    mode: str,
+    emit: Callable[[str], None],
+) -> ExtractRecord:
+    """处理单条知乎链接：登录门 → 正文提取 → 原图下载 → 清洗转换 → Markdown 落盘。
+
+    捕获全部异常并转为结构化错误，保证单条失败不中断整批。
+    """
+    record = ExtractRecord(input_url=input_url, ok=False)
+    article_dir = ""
+    try:
+        article_url, article_id = resolve_zhihu_url(input_url)
+        record.article_url = article_url
+        record.article_id = article_id
+
+        if not check_zhihu_login(port):
+            # 只在 headed 下把登录页摆到用户面前；无头/后台模式用户看不到窗口，擅自打开
+            # 知乎页面只会白白触发一次匿名访问，故仅给指引
+            if mode == MODE_HEADED:
+                try:
+                    open_tab(_ZHIHU_BASE, port, "zhihu.com")
+                    emit("[*] 知乎未登录：已在 Chrome 窗口打开 zhihu.com，请完成登录后重跑本命令。")
+                except Exception as exc:
+                    emit(f"[!] 打开 zhihu.com 登录页失败：{type(exc).__name__}: {exc}")
+            else:
+                emit("[*] 知乎未登录：请加 --headed 重跑，在弹出的前台窗口中登录 zhihu.com。")
+            raise AppError("zhihu_not_logged_in", ERROR_MESSAGES["zhihu_not_logged_in"])
+
+        cookie_header = "; ".join(f"{name}={value}" for name, value in zhihu_cookies(port).items())
+        # navigate=False：导航交给 extract_zhihu_article，避免 open_tab 先导航一次、这里再导航一次
+        tab_ws_url = open_tab(article_url, port, "zhihu.com", navigate=False)
+        title, author, body_html = extract_zhihu_article(tab_ws_url, article_url, article_id)
+        emit(f"[*] 已取到正文（作者: {author or '未知'}，标题: {title or article_id}）。")
+
+        stem = clean_title(title, f"zhihu_{article_id}")
+        article_dir = unique_dir(os.path.join(output_dir, "zhihu"), stem)
+        image_urls = collect_zhihu_image_urls(body_html)
+        emit(f"[*] 正文图片 {len(image_urls)} 张，下载原图到 {os.path.join(article_dir, 'images')} ...")
+        images_map = download_zhihu_images(
+            image_urls, os.path.join(article_dir, "images"), cookie_header, emit=emit
+        )
+
+        record.images_total = len(image_urls)
+        record.images_failed = len(image_urls) - len(images_map)
+        clean_html = clean_zhihu_html(body_html, images_map)
+        fetched_at = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+        markdown = render_zhihu_markdown(title, author, article_url, clean_html, fetched_at)
+        md_path = os.path.join(article_dir, "article.md")
+        with open(md_path, "w", encoding="utf-8") as fh:
+            fh.write(markdown)
+
+        record.ok = True
+        record.title = stem
+        record.path = md_path
+        emit(
+            f"[+] 提取完成: {md_path}"
+            f"（图片 {len(images_map)}/{len(image_urls)}，Markdown {len(markdown)} 字符）"
+        )
+    except AppError as exc:
+        record.error_code = exc.code
+        record.error_message = exc.message
+        record.error_detail = exc.detail
+    except Exception as exc:  # 基础设施异常统一归类，不向用户抛裸栈
+        record.error_code = "zhihu_extract_failed"
+        record.error_message = ERROR_MESSAGES["zhihu_extract_failed"]
+        record.error_detail = f"{type(exc).__name__}: {exc}"
+    if not record.ok and article_dir:
+        shutil.rmtree(article_dir, ignore_errors=True)  # 半成品目录不留残骸（article.md 未写成）
+    return record
+
+
 def run_downloads(
     text: str,
     *,
@@ -1511,14 +2146,14 @@ def run_downloads(
     mode: str = MODE_BACKGROUND,
     emit: Callable[[str], None] = lambda _msg: None,
 ) -> tuple[RunResult | None, AppError | None]:
-    """编排：提取链接 → 启动/复用 Chrome → 串行逐条下载（抖音 CDP 嗅探 / B 站 API+cookie）→ 汇总。
+    """编排：提取链接 → 启动/复用 Chrome → 串行逐条处理（抖音 CDP 嗅探 / B 站 API+cookie / 知乎浏览器提取）→ 汇总。
 
     返回 (结果, 错误)：入口级错误（无链接、Chrome 启动失败）时结果可能为 None 或已含 skipped。
     """
     extracted = extract_links(text)
     result = RunResult(records=[], skipped=extracted.skipped)
 
-    if not extracted.douyin and not extracted.bilibili:
+    if not extracted.douyin and not extracted.bilibili and not extracted.zhihu:
         code = "no_douyin_url" if result.skipped else "no_url"
         return (result if result.skipped else None), AppError(code, ERROR_MESSAGES[code])
 
@@ -1659,6 +2294,15 @@ def run_downloads(
                         url, cookie_header=cookie_header, output_dir=output_dir, emit=emit
                     )
                 )
+
+    # 知乎队列：登录门（z_c0 校验）→ 真实浏览器提取正文 → 原图下载 → Markdown 落盘
+    if extracted.zhihu:
+        total_zhihu = len(extracted.zhihu)
+        for index, url in enumerate(extracted.zhihu, start=1):
+            emit(f"[*] (知乎 {index}/{total_zhihu}) {url}")
+            result.extracted.append(
+                extract_zhihu_one(url, output_dir=output_dir, port=port, mode=mode, emit=emit)
+            )
     return result, None
 
 
@@ -1707,11 +2351,15 @@ def collect_text(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description="从文本中提取抖音/B 站视频链接并下载（按域名自动分流；不支持的链接跳过；多链接串行逐个处理）",
+        description=(
+            "从文本中提取抖音/B 站视频链接并下载、知乎回答/专栏文章链接提取为 Markdown"
+            "（按域名自动分流；不支持的链接跳过；多链接串行逐个处理）"
+        ),
         epilog=(
             "示例：\n"
             f"  uv run {PROG}.py \"8.74 复制打开抖音 https://v.douyin.com/EBgtkB68340/\"\n"
             f"  uv run {PROG}.py \"BV1B6YR6gEyd 或 https://b23.tv/ApmE1Nd\"\n"
+            f"  uv run {PROG}.py \"https://www.zhihu.com/question/1923534024288236685/answer/2021258227166319271\"\n"
             f"  Get-Content 文案.txt -Raw | uv run {PROG}.py --json\n"
             f"  uv run {PROG}.py schema"
         ),
@@ -1720,7 +2368,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "text",
         nargs="*",
-        help="含抖音/B 站链接或裸 BV 号的文本（多段以换行拼接；缺省且 stdin 非 TTY 时读 stdin，'-' 显式表示 stdin）",
+        help="含抖音/B 站/知乎链接或裸 BV 号的文本（多段以换行拼接；缺省且 stdin 非 TTY 时读 stdin，'-' 显式表示 stdin）",
     )
     parser.add_argument("--json", action="store_true", help="输出 JSON 包络（stdout 仅一个 JSON 对象）")
     parser.add_argument("--schema", action="store_true", help="仅输出 CLI 契约 JSON 并退出")
@@ -1732,7 +2380,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode_group.add_argument(
         "--headed",
         action="store_true",
-        help="前台可见窗口模式（人工完成验证滑块 / 首次登录 B 站）",
+        help="前台可见窗口模式（人工完成验证滑块 / 首次登录 B 站与知乎）",
     )
     mode_group.add_argument(
         "--headless",
@@ -1782,12 +2430,35 @@ def render_text(result: RunResult, output_dir: str, mode: str = MODE_BACKGROUND)
             print(f"       原因: {record.error_code} - {record.error_message}")
             if record.error_detail:
                 print(f"       详情: {record.error_detail}")
+    for record in result.extracted:
+        if record.ok:
+            print(f"[OK]   {record.article_url}")
+            print(
+                f"       文件: {record.path}"
+                f"（图片 {record.images_total - record.images_failed}/{record.images_total}）"
+            )
+        else:
+            print(f"[FAIL] {record.input_url}")
+            print(f"       原因: {record.error_code} - {record.error_message}")
+            if record.error_detail:
+                print(f"       详情: {record.error_detail}")
     for skipped in result.skipped:
         print(f"[SKIP] {skipped.url}（不支持的链接）")
     print(
-        f"汇总: 共 {len(result.records)} 条，成功 {result.succeeded}，失败 {result.failed}，"
-        f"跳过 {len(result.skipped)}；下载目录 {output_dir}"
+        f"汇总: 视频 {len(result.records)} 条（成功 {result.succeeded}，失败 {result.failed}），"
+        f"知乎 {len(result.extracted)} 篇（成功 {result.extracted_succeeded}，失败 {result.extracted_failed}），"
+        f"跳过 {len(result.skipped)}；输出目录 {output_dir}"
     )
+    if any(record.error_code == "zhihu_not_logged_in" for record in result.extracted):
+        print(
+            "提示: 知乎需要登录态。加 --headed 重跑，在弹出的 Chrome 窗口中登录 zhihu.com 后再重跑。",
+            file=sys.stderr,
+        )
+    elif result.extracted_failed:
+        print(
+            "提示: 知乎提取失败多为页面结构改版或风控；错误详情里带页面标题与正文候选区统计，可据此定位。",
+            file=sys.stderr,
+        )
     if result.failed and not result.succeeded:
         if mode == MODE_HEADLESS_NEW:
             print(
@@ -1809,6 +2480,16 @@ def render_text(result: RunResult, output_dir: str, mode: str = MODE_BACKGROUND)
             )
         else:
             print("提示: 若 Chrome 窗口出现验证滑块，请人工完成后重跑。", file=sys.stderr)
+
+
+def describe_failures(result: RunResult) -> str:
+    """部分成功时的错误摘要（抖音/B 站下载与知乎提取分别计数）。"""
+    parts = []
+    if result.failed:
+        parts.append(f"{result.failed} 条视频下载失败")
+    if result.extracted_failed:
+        parts.append(f"{result.extracted_failed} 篇知乎提取失败")
+    return "，".join(parts) or "存在失败项"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1888,13 +2569,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     assert result is not None
+    failure_total = result.failed + result.extracted_failed
     if args.json:
-        if result.failed:
+        if failure_total:
             print(
                 json.dumps(
                     envelope_error(
                         "download_failed",
-                        f"{result.failed} 条下载失败",
+                        describe_failures(result),
                         data=result.to_data(),
                     ),
                     ensure_ascii=False,
@@ -1904,7 +2586,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(envelope_ok(result.to_data()), ensure_ascii=False))
     else:
         render_text(result, output_dir, mode=mode)
-    return 1 if result.failed else 0
+    return 1 if failure_total else 0
 
 
 if __name__ == "__main__":

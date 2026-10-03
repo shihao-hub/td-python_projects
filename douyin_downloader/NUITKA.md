@@ -6,13 +6,13 @@
 
 | 项 | 值 |
 |---|---|
-| 打包日期 | 2026-10-01（v2.1.0）；2026-10-02 重建至 v2.3.0 |
+| 打包日期 | 2026-10-01（v2.1.0）；2026-10-02 重建至 v2.3.0；2026-10-03 重建至 v2.5.0（知乎提取） |
 | Nuitka | 4.2.2 |
 | 编译解释器 | Python 3.13（uv 管理，脚本 PEP 723 环境隔离） |
 | C 编译器 | MSVC cl 14.3（VS 2022 Build Tools，`D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`） |
 | 缓存 | clcache（Nuitka 自动使用，二次编译大幅加速） |
-| 入口 | `douyin_dl.py`（VERSION 2.3.0，唯一第三方依赖 `websocket-client>=1.8`） |
-| 产物 | `dist\douyin_dl.exe`，onefile 单文件约 6.9 MB |
+| 入口 | `douyin_dl.py`（VERSION 2.5.0，第三方依赖 `websocket-client>=1.8` + `beautifulsoup4>=4.12` + `html2text>=2024.2.26`） |
+| 产物 | `dist\douyin_dl.exe`，onefile 单文件约 7.6 MB（v2.3.0 时 6.9 MB，知乎提取新增两个纯 Python 库约 +0.7 MB） |
 
 ## 2. 构建方式（固化脚本）
 
@@ -26,7 +26,7 @@ uv run scripts\build_exe.py --no-icon    # 不带图标
 
 脚本要点（改脚本前必读）：
 
-- **编译环境必须同时含 `nuitka` 与 `websocket-client`**（PEP 723 头已声明）：Nuitka 靠编译期解释器 import 定位第三方包，缺了不会被打进 exe，运行时才报 ModuleNotFoundError。
+- **编译环境必须与入口脚本的 PEP 723 依赖保持一致**（当前为 `websocket-client`、`beautifulsoup4`、`html2text`）：Nuitka 靠编译期解释器 import 定位第三方包，漏声明哪个，哪个就不会被打进 exe，运行时才报 ModuleNotFoundError。
 - **`zstandard` 必须声明**：onefile 压缩依赖它，缺了体积从 6.8 MB 涨到 27.3 MB（功能不受影响）。
 - 版本号从 `douyin_dl.py` 的 `VERSION` 常量正则解析，写入 `--product-version` / `--file-version`，与源码单一事实源，不重复维护。
 - 关键 flags：`--standalone --onefile --windows-console-mode=force --include-package=websocket --nofollow-import-to=websocket.tests --noinclude-unittest-mode=nofollow --onefile-tempdir-spec={CACHE_DIR}/douyin_dl/{VERSION}`。`websocket.tests` 是依赖包自带的测试子包，排除以消 unittest 警告并瘦身。
@@ -39,7 +39,9 @@ uv run scripts\build_exe.py --no-icon    # 不带图标
 - 资产与再生成链路见父仓库《python exe 默认图标》文档（`.scripts\gen_python_logo.py` + `.scripts\gen_icon.py`）。
 - Nuitka 经 `--windows-icon-from-ico` 直接写 PE 资源，不需要 Go 侧 rsrc/.syso 那套复制流程。
 
-## 4. 验证结果（首次打包实测）
+## 4. 验证结果
+
+### 4.1 首次打包实测（v2.1.0 / v2.3.0）
 
 | 验证项 | 方法 | 结果 |
 |---|---|---|
@@ -49,6 +51,19 @@ uv run scripts\build_exe.py --no-icon    # 不带图标
 | stdin 管道 + JSON | `echo <非抖音链接> \| dist\douyin_dl.exe --json -` | 包络正确，`skipped` 如实列出，退出码 2 ✅ |
 | 图标嵌入 | `ExtractAssociatedIcon` | 32x32 提取成功 ✅ |
 | 完整下载链路 | 未跑（会真下视频并拉起 Chrome 自动化窗口） | 需要时 `.\dist\douyin_dl.exe "<分享文案>"` 实测 |
+
+### 4.2 v2.5.0（知乎提取）实测
+
+| 验证项 | 方法 | 结果 |
+|---|---|---|
+| 版本输出 | `dist\douyin_dl.exe --version` | `douyin_dl 2.5.0`，退出码 0 ✅ |
+| 契约导出 | `dist\douyin_dl.exe schema` | 含 `extracted` 数组、`summary.extracted`、`zhihu_not_logged_in` / `zhihu_extract_failed`、side_effects 含 zhihu.com / zhimg.com，退出码 0 ✅ |
+| 新依赖入包 | `dist\douyin_dl.exe schema` 能跑通即证明 `bs4` / `html2text` 已随包（二者在模块顶层 import） | 无 ModuleNotFoundError ✅ |
+| 未登录路径 | `dist\douyin_dl.exe --json "<知乎链接>"`（profile 无 z_c0） | 退出码 1，`zhihu_not_logged_in` 结构化失败，不崩溃 ✅ |
+| 知乎真实提取 | 默认 `headless-new` 模式提取 `zhuanlan.zhihu.com/p/96956163` | `article.md` + 元信息块正常，退出码 0 ✅ |
+| 无链接路径 | `dist\douyin_dl.exe --json "纯文本没有链接"` | 退出码 2，`no_url` ✅ |
+| stdin 管道 + JSON | `"<无关链接>" \| dist\douyin_dl.exe --json -` | `skipped` 如实列出，`summary` 含 `extracted: 0`，退出码 2 ✅ |
+| 完整视频链路 | 未跑（同 4.1，属抖音侧回归范围） | 需要时 `.\dist\douyin_dl.exe "<分享文案>"` 实测 |
 
 ## 5. 已知边界与注意事项
 
