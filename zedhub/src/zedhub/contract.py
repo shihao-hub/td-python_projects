@@ -122,6 +122,12 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
         path_params=("session_id",),
     ),
     HttpEndpoint(
+        method="GET", path=f"{API_PREFIX}/trajectory/{{session_id}}", api_method="trajectory.show",
+        summary="Unified trajectory timeline (claude-code/codex/opencode/antigravity/antigravity-desktop).",
+        path_params=("session_id",),
+        query_params=("source", "limit"),
+    ),
+    HttpEndpoint(
         method="GET", path=f"{API_PREFIX}/search", api_method="search.sessions",
         summary="Search session metadata (title/agent/id/project) across the Zed index"
                 " and OpenCode sessions; opencode content full-text search is not implemented yet.",

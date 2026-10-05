@@ -16,56 +16,34 @@
     <span id="status" class="status" role="status" aria-live="polite"></span>
   </div>
 </header>
-
-<form id="filters" class="filters" autocomplete="off">
-  <div class="field grow">
-    <label for="q">关键词</label>
-    <input id="q" name="q" type="search" placeholder="多个关键词用空格分隔（全部命中）；/ 聚焦，Esc 清空" spellcheck="false">
-  </div>
-  <div class="field">
-    <label for="agent">Agent</label>
-    <select id="agent" name="agent"><option value="">全部</option></select>
-  </div>
-  <div class="field">
-    <label for="project">项目</label>
-    <select id="project" name="project"><option value="">全部</option></select>
-  </div>
-  <div class="field">
-    <label for="archived">归档</label>
-    <select id="archived" name="archived">
-      <option value="no">仅活跃</option>
-      <option value="all">含归档</option>
-      <option value="only">仅归档</option>
-    </select>
-  </div>
-  <div class="field">
-    <label for="since">起</label>
-    <input id="since" name="since" type="date">
-  </div>
-  <div class="field">
-    <label for="until">止</label>
-    <input id="until" name="until" type="date">
-  </div>
-  <div class="field check">
-    <label for="unlinked"><input id="unlinked" name="unlinked" type="checkbox"> 含未进 Zed 索引的 OpenCode 会话</label>
-  </div>
-</form>
-
 <div id="notice" class="notice" hidden></div>
-
-<main class="layout">
-  <section class="results" aria-label="检索结果">
-    <div id="list" class="list"></div>
+<main class="layout2">
+  <section class="left" aria-label="筛选与会话">
+    <form id="filters" class="filters side" autocomplete="off">
+      <div class="field grow">
+        <label for="q">关键词</label>
+        <input id="q" name="q" type="search" placeholder="多个关键词用空格分隔（全部命中）；/ 聚焦，Esc 清空" spellcheck="false">
+      </div>
+      <div class="frow">
+        <div class="field"><label for="agent">Agent</label><select id="agent" name="agent"><option value="">全部</option></select></div>
+        <div class="field"><label for="project">项目</label><select id="project" name="project"><option value="">全部</option></select></div>
+        <div class="field"><label for="archived">归档</label><select id="archived" name="archived"><option value="no">仅活跃</option><option value="all">含归档</option><option value="only">仅归档</option></select></div>
+      </div>
+      <div class="frow">
+        <div class="field"><label for="since">起</label><input id="since" name="since" type="date"></div>
+        <div class="field"><label for="until">止</label><input id="until" name="until" type="date"></div>
+      </div>
+      <div class="field check"><label for="unlinked"><input id="unlinked" name="unlinked" type="checkbox"> 含未进 Zed 索引的 OpenCode 会话</label></div>
+    </form>
+    <div id="list" class="list side-list" role="listbox" aria-label="会话列表"></div>
   </section>
   <aside id="detail" class="detail" aria-label="会话详情">
     <p class="placeholder">从左侧选择一条命中，查看所属会话。</p>
   </aside>
 </main>
-
 <footer class="foot">
   <span>同一契约的其他两个壳：<code>zedhub search &lt;关键词&gt;</code> · MCP <code>zedhub.search.sessions</code></span>
 </footer>
-
 <script src="/ui/app.js"></script>
 </body>
 </html>

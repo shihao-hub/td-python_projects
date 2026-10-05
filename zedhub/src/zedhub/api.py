@@ -253,6 +253,32 @@ def _stats_effort(params: dict, ctx: CallContext, progress=noop_progress) -> Any
     return out
 
 
+def _trajectory(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
+    """统一轨迹：source + session_id → TimelineEvent 列表（只读，不解析写库）。"""
+    from pathlib import Path as _P
+
+    from .core.agent_paths import locate_session_files
+    from .core.trajectory import load_trajectory
+
+    sid = _opt_str(params, "session_id")
+    if sid is None:
+        raise InvalidParamsError("param 'session_id' is required")
+    source = _opt_str(params, "source") or "claude-code"
+    limit = _opt_int(params, "limit") or 2000
+    if source == "opencode":
+        return load_trajectory(source="opencode", files=[sid], db=ctx.opencode_db,
+                               limit=min(limit, 2000))
+    if source == "antigravity-desktop":
+        base = _P.home() / ".gemini" / "antigravity" / "conversations"
+        f = base / f"{sid}.db"
+        files = [f] if f.is_file() else []
+    else:
+        files = locate_session_files(source, [sid]).get(sid, [])
+    if not files:
+        raise InvalidParamsError(f"trajectory not found: {source}/{sid}")
+    return load_trajectory(source=source, files=files, limit=min(limit, 2000))
+
+
 # -- 会话元数据检索 ---------------------------------------------------------------
 
 # API 默认返回条数（limit=0 表示不限制，由调用方显式指定）
@@ -380,6 +406,7 @@ METHODS: dict[str, Callable[..., Any]] = {
     "sessions.content": _sessions_content,
     "search.sessions": _search,
     "stats.effort": _stats_effort,
+    "trajectory.show": _trajectory,
     "sessions.link": _sessions_link,
     "archive.export": _archive_export,
     "archive.inspect": _archive_inspect,

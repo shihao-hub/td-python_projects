@@ -96,17 +96,22 @@ function showNotice(text) {
 
 /* -- 表单状态 <-> URL（刷新/分享保持检索条件） -------------------------------- */
 
-function readState() {
+function restoreFromUrl() {
   const p = new URLSearchParams(location.search);
   el.q.value = p.get("q") || "";
   el.archived.value = p.get("archived") || "no";
   el.since.value = p.get("since") || "";
   el.until.value = p.get("until") || "";
   el.unlinked.checked = p.get("include_unlinked") === "true";
+  el.agent.value = p.get("agent") || "";
+  el.project.value = p.get("project") || "";
+}
+
+function readState() {
   return {
     q: el.q.value.trim(),
-    agent: p.get("agent") || "",
-    project: p.get("project") || "",
+    agent: el.agent.value,
+    project: el.project.value,
     archived: el.archived.value,
     since: el.since.value,
     until: el.until.value,
@@ -156,9 +161,7 @@ async function loadOptions() {
   } catch (e) {
     showNotice(`读取项目列表失败：${e.message}`);
   }
-  const p = new URLSearchParams(location.search);
-  el.agent.value = p.get("agent") || "";
-  el.project.value = p.get("project") || "";
+  restoreFromUrl();
 }
 
 /* -- 检索 -------------------------------------------------------------------- */
@@ -260,12 +263,73 @@ function renderHit(hit, tokens) {
 
 /* -- 详情面板 ---------------------------------------------------------------- */
 
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function mdToHtml(src) {
+  // 轻量 markdown：转义后处理围栏代码块/行内 code/标题/粗体/列表/换行
+  const fenced = [];
+  let text = esc(src || "");
+  text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => {
+    fenced.push(`<pre><code>${code}</code></pre>`);
+    return `\u0000${fenced.length - 1}\u0000`;
+  });
+  const lines = text.split("\n");
+  let html = "";
+  let inList = false;
+  for (const ln of lines) {
+    const m = ln.match(/^\u0000(\d+)\u0000$/);
+    if (m) { if (inList) { html += "</ul>"; inList = false; } html += fenced[+m[1]]; continue; }
+    if (/^#{1,4}\s/.test(ln)) {
+      if (inList) { html += "</ul>"; inList = false; }
+      const lvl = ln.match(/^#+/)[0].length;
+      html += `<h${lvl}>${ln.replace(/^#+\s*/, "")}</h${lvl}>`;
+    } else if (/^\s*[-*]\s+/.test(ln)) {
+      if (!inList) { html += "<ul>"; inList = true; }
+      html += `<li>${ln.replace(/^\s*[-*]\s+/, "")}</li>`;
+    } else if (!ln.trim()) {
+      if (inList) { html += "</ul>"; inList = false; }
+    } else {
+      if (inList) { html += "</ul>"; inList = false; }
+      html += `<p>${ln}</p>`;
+    }
+  }
+  if (inList) html += "</ul>";
+  return html
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
 function renderDetail(hit, rows, actions) {
   el.detail.replaceChildren();
   const h2 = document.createElement("h2");
   h2.textContent = hit.title || "(无标题)";
   el.detail.append(h2);
 
+  const tabs = document.createElement("div");
+  tabs.className = "tabs";
+  tabs.setAttribute("role", "tablist");
+  const panes = {};
+  for (const name of ["元数据", "轨迹"]) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "tab"; b.textContent = name;
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", name === "元数据" ? "true" : "false");
+    const pane = document.createElement("div");
+    pane.className = "tabpane";
+    pane.hidden = name !== "元数据";
+    panes[name] = pane;
+    b.addEventListener("click", () => {
+      for (const n of Object.keys(panes)) panes[n].hidden = n !== name;
+      for (const o of tabs.querySelectorAll(".tab")) o.setAttribute("aria-selected", String(o === b));
+    });
+    tabs.append(b);
+  }
+  el.detail.append(tabs);
+
+  const meta = panes["元数据"];
   const dl = document.createElement("dl");
   for (const [k, v, mono] of rows) {
     const dt = document.createElement("dt");
@@ -275,14 +339,19 @@ function renderDetail(hit, rows, actions) {
     dd.textContent = v == null || v === "" ? "-" : String(v);
     dl.append(dt, dd);
   }
-  el.detail.append(dl);
-
+  meta.append(dl);
   if (actions && actions.length) {
     const bar = document.createElement("div");
     bar.className = "toolbar";
     for (const a of actions) bar.append(a);
-    el.detail.append(bar);
+    meta.append(bar);
   }
+  const tmeta = document.createElement("p");
+  tmeta.className = "placeholder";
+  tmeta.textContent = "点「查看轨迹」加载；加载后显示在这里。";
+  panes["轨迹"].append(tmeta);
+  el.detail.append(meta, panes["轨迹"]);
+  el.detail._panes = panes;
   return el.detail;
 }
 
@@ -336,6 +405,26 @@ async function openHit(hit) {
     }));
   }
 
+  if (hit.session_id || hit.thread_id) {
+    const sid = hit.session_id || hit.thread_id;
+    const src = (hit.agent_id || "").includes("codex") ? "codex"
+      : (hit.agent_id || "").includes("claude") ? "claude-code"
+      : (hit.agent_id || "").includes("antigravity") ? "antigravity" : "opencode";
+    actions.push(actionButton("查看轨迹", async (b) => {
+      b.disabled = true;
+      b.textContent = "轨迹加载中…";
+      try {
+        const body = await api(`${API}/trajectory/${encodeURIComponent(sid)}`,
+          { source: isOpencode ? "opencode" : src });
+        renderTrajectory(body.data);
+      } catch (e) {
+        showNotice(`加载轨迹失败：${e.message}`);
+      } finally {
+        b.disabled = false;
+        b.textContent = "查看轨迹";
+      }
+    }));
+  }
   renderDetail(hit, rows, actions);
 
   if (hit.kind === "zed_thread" && hit.thread_id) {
@@ -395,6 +484,56 @@ function renderMessages(content, hit) {
   el.detail.append(wrap);
 }
 
+function renderTrajectory(data) {
+  const panes = el.detail._panes;
+  const host = (panes && panes["轨迹"]) || el.detail;
+  const old = host.querySelector(".trajectory");
+  if (old) old.remove();
+  const ph = host.querySelector(".placeholder");
+  if (ph) ph.remove();
+  const wrap = document.createElement("div");
+  wrap.className = "trajectory";
+  if (/antigravity/i.test(data.source || "")) {
+    const note = document.createElement("div");
+    note.className = "degraded-note";
+    note.textContent = "Antigravity 步骤为快照降级显示：step_payload 是无公开 schema 的 protobuf，只读展示可读列与长度预览。";
+    wrap.append(note);
+  }
+  const h3 = document.createElement("h3");
+  h3.textContent = `轨迹 · ${data.source} · ${data.count} 步 · ${data.file || ""}`;
+  wrap.append(h3);
+  for (const e of data.events || []) {
+    const cls = e.role === "tool_call" ? "tool" : e.role === "tool_result" ? "result"
+      : e.role === "thinking" ? "think" : e.role === "user" ? "user" : "sys";
+    const box = document.createElement("details");
+    box.className = `tstep ${cls}`;
+    if (e.role === "tool_result" || e.role === "assistant") box.open = true;
+    const sum = document.createElement("summary");
+    sum.textContent = `${e.role}${e.name ? ` · ${e.name}` : ""}${e.ts ? ` · ${e.ts}` : ""} — ${(e.text || "").slice(0, 80)}`;
+    box.append(sum);
+    const md = document.createElement("div");
+    md.className = "md";
+    try {
+      md.innerHTML = mdToHtml(e.text || "(空)");
+    } catch (_) {
+      const pre = document.createElement("pre");
+      pre.textContent = e.text || "(空)";
+      md.append(pre);
+    }
+    box.append(md);
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "action";
+    copy.textContent = "复制";
+    copy.addEventListener("click", () => navigator.clipboard.writeText(e.text || ""));
+    box.append(copy);
+    wrap.append(box);
+  }
+  host.append(wrap);
+  const tabs = el.detail.querySelectorAll(".tab");
+  if (tabs.length === 2) tabs[1].click();
+}
+
 /* -- 事件绑定 ---------------------------------------------------------------- */
 
 let timer = null;
@@ -426,7 +565,10 @@ document.addEventListener("keydown", (e) => {
 /* -- 启动 -------------------------------------------------------------------- */
 
 loadOptions()
-  .then(() => runSearch())
+  .then(() => {
+    restoreFromUrl();
+    return runSearch();
+  })
   .catch((e) => {
     setStatus("初始化失败");
     showNotice(e.message);
