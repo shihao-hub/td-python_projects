@@ -56,7 +56,7 @@ import html2text
 import websocket
 from bs4 import BeautifulSoup
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 PROG = "douyin_dl"
 # 项目目录名（monorepo 目录名）用下划线，与 CLI 程序名 PROG 区分
 PROJECT_DIR_NAME = "douyin_downloader"
@@ -257,7 +257,7 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                     "options": {
                         "json": {"type": "boolean", "default": False, "description": "输出 JSON 包络"},
                         "schema": {"type": "boolean", "default": False, "description": "仅输出本契约 JSON 并退出"},
-                        "output_dir": {"type": "string", "default": resolved["output_dir"], "description": "下载目录"},
+                        "output_dir": {"type": "string", "default": resolved["output_dir"], "description": "下载根目录（视频落其下 douyin/、bilibili/ 子目录，知乎落 zhihu/）"},
                         "debug_port": {"type": "integer", "default": resolved["debug_port"], "description": "Chrome CDP 端口"},
                         "profile_dir": {"type": "string", "default": "", "description": "Chrome 专用 Profile 目录，空表示使用默认数据目录"},
                         "chrome": {"type": "string", "default": resolved["chrome"], "description": "Chrome 可执行文件路径"},
@@ -297,6 +297,7 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
                     "裸 BV 号（BV+10 位字母数字）与 b23.tv 短链、bilibili.com 链接等效支持",
                     "知乎链接只支持回答（/question/<qid>/answer/<aid>）与专栏文章（/p/<pid>）两类，其余知乎链接（想法/收藏夹/问题页等）按 invalid_url 失败",
                     "知乎提取复用同一 Chrome profile 的登录态（关键 cookie z_c0 为 HttpOnly，只能经 CDP 读取），未登录时该批按 zhihu_not_logged_in 失败；首次使用先 --headed 登录一次 zhihu.com",
+                    "视频产物按平台分子目录：抖音 {output_dir}/douyin/、B 站 {output_dir}/bilibili/，与知乎的 zhihu/ 对称；同名文件自动加 _1、_2 后缀，不覆盖既有产物",
                     "知乎每篇文章一个独立目录 {output_dir}/zhihu/{标题}/，内含 article.md 与 images/（原图下载，命名 image_001 起）；同名目录自动加 _1、_2 后缀，不覆盖既有产物",
                     "知乎正文图片下载失败不致命：该图在 Markdown 中保留原始 URL 引用，失败张数记入 images_failed",
                     "Chrome 实例运行结束后常驻不退出（复用登录态，后续运行秒连）；用 --close-browser 显式收尾",
@@ -304,7 +305,12 @@ def build_schema(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
             }
         ],
         "side_effects": {
-            "filesystem": [resolved["output_dir"], os.path.join(resolved["output_dir"], "zhihu")],
+            "filesystem": [
+                resolved["output_dir"],
+                os.path.join(resolved["output_dir"], "douyin"),
+                os.path.join(resolved["output_dir"], "bilibili"),
+                os.path.join(resolved["output_dir"], "zhihu"),
+            ],
             "process": [
                 "Chrome（独立 Profile + CDP 调试端口，默认 headless-new；回退或显式指定时为 background：真浏览器 + 窗口移到屏幕外）"
             ],
@@ -2168,6 +2174,10 @@ def run_downloads(
     except AppError as exc:
         return result, exc
 
+    # 产物按平台分子目录（与知乎的 zhihu/ 对称）；子目录由下载层 unique_path 自动创建
+    douyin_dir = os.path.join(output_dir, "douyin")
+    bilibili_dir = os.path.join(output_dir, "bilibili")
+
     def run_douyin_batch(urls: list[str], label: str = "") -> list[DownloadRecord]:
         records: list[DownloadRecord] = []
         for index, url in enumerate(urls, start=1):
@@ -2202,7 +2212,7 @@ def run_downloads(
             records.append(
                 download_one(
                     url,
-                    output_dir=output_dir,
+                    output_dir=douyin_dir,
                     port=port,
                     tab_ws_url=tab_ws_url,
                     emit=emit,
@@ -2291,7 +2301,7 @@ def run_downloads(
                 emit(f"[*] (B站 {index}/{total_bili}) {url}")
                 result.records.extend(
                     download_bilibili_one(
-                        url, cookie_header=cookie_header, output_dir=output_dir, emit=emit
+                        url, cookie_header=cookie_header, output_dir=bilibili_dir, emit=emit
                     )
                 )
 
@@ -2372,7 +2382,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--json", action="store_true", help="输出 JSON 包络（stdout 仅一个 JSON 对象）")
     parser.add_argument("--schema", action="store_true", help="仅输出 CLI 契约 JSON 并退出")
-    parser.add_argument("--output-dir", default=default_download_dir(), help="下载目录（默认 ~/Downloads）")
+    parser.add_argument(
+        "--output-dir",
+        default=default_download_dir(),
+        help="下载根目录（默认 ~/Downloads；产物按平台落子目录 douyin/、bilibili/、zhihu/）",
+    )
     parser.add_argument("--debug-port", type=int, default=DEBUG_PORT, help=f"Chrome CDP 端口（默认 {DEBUG_PORT}）")
     parser.add_argument("--profile-dir", default=None, help="Chrome 专用 Profile 目录（默认项目数据目录下 chrome-profile）")
     parser.add_argument("--chrome", default=CHROME_PATH, help="Chrome 可执行文件路径")

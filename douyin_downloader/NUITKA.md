@@ -6,12 +6,12 @@
 
 | 项 | 值 |
 |---|---|
-| 打包日期 | 2026-10-01（v2.1.0）；2026-10-02 重建至 v2.3.0；2026-10-03 重建至 v2.5.0（知乎提取） |
+| 打包日期 | 2026-10-01（v2.1.0）；2026-10-02 重建至 v2.3.0；2026-10-03 重建至 v2.5.0（知乎提取）；2026-10-06 重建至 v2.6.0（产物按平台分子目录） |
 | Nuitka | 4.2.2 |
 | 编译解释器 | Python 3.13（uv 管理，脚本 PEP 723 环境隔离） |
 | C 编译器 | MSVC cl 14.3（VS 2022 Build Tools，`D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`） |
 | 缓存 | clcache（Nuitka 自动使用，二次编译大幅加速） |
-| 入口 | `douyin_dl.py`（VERSION 2.5.0，第三方依赖 `websocket-client>=1.8` + `beautifulsoup4>=4.12` + `html2text>=2024.2.26`） |
+| 入口 | `douyin_dl.py`（VERSION 2.6.0，第三方依赖 `websocket-client>=1.8` + `beautifulsoup4>=4.12` + `html2text>=2024.2.26`） |
 | 产物 | `dist\douyin_dl.exe`，onefile 单文件约 7.6 MB（v2.3.0 时 6.9 MB，知乎提取新增两个纯 Python 库约 +0.7 MB） |
 
 ## 2. 构建方式（固化脚本）
@@ -64,6 +64,15 @@ uv run scripts\build_exe.py --no-icon    # 不带图标
 | 无链接路径 | `dist\douyin_dl.exe --json "纯文本没有链接"` | 退出码 2，`no_url` ✅ |
 | stdin 管道 + JSON | `"<无关链接>" \| dist\douyin_dl.exe --json -` | `skipped` 如实列出，`summary` 含 `extracted: 0`，退出码 2 ✅ |
 | 完整视频链路 | 未跑（同 4.1，属抖音侧回归范围） | 需要时 `.\dist\douyin_dl.exe "<分享文案>"` 实测 |
+
+### 4.3 v2.6.0（产物按平台分子目录）实测
+
+| 验证项 | 方法 | 结果 |
+|---|---|---|
+| 版本输出 | `dist\douyin_dl.exe --version` | `douyin_dl 2.6.0`，退出码 0 ✅ |
+| 契约导出 | `dist\douyin_dl.exe schema` | `side_effects.filesystem` 含根目录 + `douyin` / `bilibili` / `zhihu` 三个子目录 ✅ |
+| 落盘布局 | `dist\douyin_dl.exe --json --output-dir <临时目录> "https://b23.tv/ApmE1Nd"` | 产物落 `<临时目录>\bilibili\*.mp4`（40 MB，audio=merged），退出码 0 ✅ |
+| 抖音链路 | 未跑（子目录逻辑与 B 站同一编排层改动，风险低） | 需要时 `.\dist\douyin_dl.exe "<分享文案>"` 实测 |
 
 ## 5. 已知边界与注意事项
 

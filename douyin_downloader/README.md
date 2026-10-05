@@ -10,7 +10,7 @@
 4. **抖音 — 免签名免反爬**：不做 a_bogus / msToken 签名逆向，直接复用真实浏览器的播放鉴权与 Cookie。
 5. **B 站 — API + 登录态**：直接调 B 站公开 web API（view / playurl，免签名）拿 DASH 流地址，登录态经 CDP 从同一 Chrome Profile 读取（含 HttpOnly 的 SESSDATA），清晰度跟随账号权益；DASH 音视频分离流经 `ffmpeg -c copy` 无损合并。
 6. **知乎 — 浏览器渲染 + 登录态提取**：知乎正文是登录后才完整下发的富文本，且匿名直连返回 403，故同样走真实浏览器：CDP 读登录态（关键 cookie `z_c0` 为 HttpOnly）→ 打开目标页 → 等正文容器渲染 → 浏览器内 JS 分段滚动触发图片懒加载后取容器 `innerHTML` → Python 侧用 BeautifulSoup 清洗（剥壳/图注斜体化/图片本地化）+ html2text 转 Markdown → 原图逐张下载到文章目录。
-7. **自动落盘**：抖音/B 站视频默认保存到 `~/Downloads`，同名文件自动加 `_1`、`_2` 后缀；知乎每篇文章一个独立目录 `~/Downloads/zhihu/{标题}/`（`article.md` + `images/`），目录重名同样加后缀，均不覆盖既有产物。
+7. **自动落盘（按平台分子目录）**：抖音 `{output_dir}/douyin/`、B 站 `{output_dir}/bilibili/`、知乎 `{output_dir}/zhihu/{标题}/`（`article.md` + `images/`），默认 `{output_dir}` 为 `~/Downloads`；同名文件/目录自动加 `_1`、`_2` 后缀，均不覆盖既有产物。
 
 ## 依赖与单脚本形态
 
@@ -26,20 +26,6 @@
 - 推荐入口：`uv run douyin_dl.py ...`
 - 若当前 Python 环境已装上述三个依赖，`python douyin_dl.py ...` 同样可用。
 - `beautifulsoup4` 与 `html2text` 均为纯 Python（无编译产物），仅知乎提取链路使用。
-
-## 依赖与单脚本形态
-
-依赖通过文件头部的 PEP 723 内联元数据声明，`uv run` 会自动准备隔离环境：
-
-```python
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["websocket-client>=1.8"]
-# ///
-```
-
-- 推荐入口：`uv run douyin_dl.py ...`
-- 若当前 Python 环境已装 `websocket-client`，`python douyin_dl.py ...` 同样可用。
 
 ## 使用方法
 
@@ -144,7 +130,7 @@ JSON 包络（仓库统一约定）：
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--output-dir` | `~/Downloads` | 下载目录 |
+| `--output-dir` | `~/Downloads` | 下载根目录（产物按平台落 `douyin/`、`bilibili/`、`zhihu/` 子目录） |
 | `--debug-port` | `9222` | Chrome CDP 调试端口 |
 | `--profile-dir` | `%APPDATA%\language_projects\douyin_downloader\chrome-profile` | Chrome 专用 Profile |
 | `--chrome` | `C:\Program Files\Google\Chrome\Application\chrome.exe` | Chrome 可执行文件 |
@@ -175,7 +161,7 @@ uv run scripts\build_exe.py --dir        # standalone 文件夹版（启动更�
 | 路径 | 内容 |
 |---|---|
 | `chrome-profile\` | Chrome 专用 Profile（登录态、Cookie、偏好）；其中 `Default\Preferences` 的下载目录指向 `--output-dir` |
-| 视频产物 | 默认 `~/Downloads`（由 `--output-dir` 决定，不属于工具缓存） |
+| 视频产物 | `{output_dir}\douyin\`、`{output_dir}\bilibili\`（默认 `~/Downloads` 下，按平台分子目录，不属于工具缓存） |
 | 知乎产物 | `{output_dir}\zhihu\{标题}\`（`article.md` + `images/`，同样由 `--output-dir` 决定） |
 
 历史路径 `C:\Users\29580\.chrome-automation-profile` 已迁移到上表新位置。
