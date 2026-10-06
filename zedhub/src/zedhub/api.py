@@ -9,7 +9,7 @@ HTTP 调用 daemon。
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -25,7 +25,7 @@ from .core.errors import (
     ZedhubError,
 )
 from .core.model import Overview, ProjectStat, Session, SessionContent, Thread
-from .core.model import SearchRequest, SearchResult
+from .core.model import SearchRequest, SearchResult, SessionScope
 from .core.opencode_repo import OpencodeDb
 from .core.repo import ZedDb
 from .core.service import ThreadService
@@ -130,6 +130,16 @@ def _opt_bool(params: dict, key: str, default: bool = False) -> bool:
     raise InvalidParamsError(f"param '{key}' must be a boolean, got {value!r}")
 
 
+def _scope(params: dict) -> SessionScope:
+    value = params.get("scope", SessionScope.ALL.value)
+    try:
+        return SessionScope(value)
+    except ValueError as exc:
+        raise InvalidParamsError(
+            "param 'scope' must be one of ('all', 'zed', 'external')"
+        ) from exc
+
+
 def _archived(params: dict) -> str:
     value = params.get("archived", "no")
     if value not in ("no", "only", "all"):
@@ -213,16 +223,36 @@ def _attach_zed_link(sessions: list[Session], ctx: CallContext) -> list[dict]:
 
 
 def _sessions_list(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
-    src = get_source(_opt_str(params, "source"))
-    sessions = src.list_sessions(
-        SessionListRequest(
-            project=_opt_str(params, "project"),
-            agent=_opt_str(params, "agent"),
-            archived=_archived(params),
-            limit=_opt_int(params, "limit"),
-        ),
-        db=ctx.opencode_db,
+    source_id = _opt_str(params, "source")
+    request = SessionListRequest(
+        project=_opt_str(params, "project"),
+        agent=_opt_str(params, "agent"),
+        archived=_archived(params),
+        limit=_opt_int(params, "limit"),
     )
+    if source_id == "all":
+        sessions = []
+        for src in list_source_infos():
+            if src.source_id not in ("opencode", "claude-code", "codex", "antigravity"):
+                continue
+            try:
+                source_request = request.model_copy(update={"limit": None})
+                sessions.extend(
+                    get_source(src.source_id).list_sessions(
+                        source_request, db=ctx.opencode_db
+                    )
+                )
+            except ZedhubError:
+                continue
+        sessions.sort(
+            key=lambda s: s.updated_at or s.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        if request.limit is not None and request.limit > 0:
+            sessions = sessions[:request.limit]
+    else:
+        src = get_source(source_id)
+        sessions = src.list_sessions(request, db=ctx.opencode_db)
     return _attach_zed_link(sessions, ctx)
 
 
@@ -326,6 +356,7 @@ def _search(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
         since=_opt_date(params, "since"),
         until=_opt_date(params, "until"),
         limit=SEARCH_DEFAULT_LIMIT if limit is None else limit,
+        scope=_scope(params),
         include_unlinked=_opt_bool(params, "include_unlinked"),
     )
 
@@ -333,17 +364,19 @@ def _search(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
         with ZedDb(snap) as db:
             threads = db.load_threads()
 
-    sessions: list[Session] | None = None
+    sessions: list[Session] = []
     degraded: list[str] = []
-    try:
-        with open_opencode_ro(ctx.opencode_db) as opened:
-            oc = OpencodeDb(
-                opened.con, db_path=opened.db_path, using_snapshot=opened.using_snapshot
+    sources = ("opencode", "claude-code", "codex", "antigravity")
+    for source_id in sources:
+        try:
+            source = get_source(source_id)
+            sessions.extend(
+                source.list_sessions(
+                    SessionListRequest(archived="all"), db=ctx.opencode_db
+                )
             )
-            # 归档过滤在检索层统一裁决，这里取全量会话（session 表为百行量级）
-            sessions = oc.list_sessions(archived="all")
-    except ZedhubError as exc:
-        degraded.append(f"OpenCode 数据源不可用，结果仅含 Zed 索引：{exc}")
+        except ZedhubError as exc:
+            degraded.append(f"{source_id} 数据源不可用：{exc}")
 
     result = SearchService(threads=threads, sessions=sessions).search(request)
     result.degraded = degraded

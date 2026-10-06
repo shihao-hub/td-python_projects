@@ -31,6 +31,7 @@ class Capability(str, Enum):
     THREADS = "threads"
     SESSIONS = "sessions"
     CONTENT = "content"
+    DISCOVERY = "discovery"
     EFFORT = "effort"
     EXPORT = "export"
     LINK = "link"

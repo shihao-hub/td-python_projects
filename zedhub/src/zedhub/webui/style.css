@@ -104,6 +104,9 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1
 }
 .badge.agent { color: var(--accent); border-color: var(--accent); }
 .badge.arch { color: var(--warn); border-color: var(--warn); }
+.badge.zed { color: #6b5cc5; border-color: #8d80dd; }
+.badge.external { color: #b06a18; border-color: #d59a55; }
+.badge.source { color: var(--ink-soft); }
 
 .detail {
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;

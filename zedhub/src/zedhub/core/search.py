@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from .model import SearchHit, SearchRequest, SearchResult, Session, Thread
+from .model import SearchHit, SearchRequest, SearchResult, Session, SessionScope, Thread
 
 # 时间排序哨兵：全局 tz-aware，避免与 naive datetime 比较时抛 TypeError
 _MIN_TS = datetime.min.replace(tzinfo=timezone.utc)
@@ -49,13 +49,19 @@ class SearchService:
 
     # -- 条目构建 ---------------------------------------------------------------
 
-    def _hits(self, include_unlinked: bool) -> list[SearchHit]:
-        by_id: dict[str, Session] = {s.external_id: s for s in self.sessions or []}
+    def _hits(self, include_unlinked: bool, scope: SessionScope) -> list[SearchHit]:
+        include_external = include_unlinked or scope in (SessionScope.ALL, SessionScope.EXTERNAL)
+        by_id: dict[tuple[str, str], Session] = {
+            (s.source_id, s.external_id): s for s in self.sessions or []
+        }
         hits: list[SearchHit] = []
         linked: set[str] = set()
 
         for t in self.threads:
-            sess = by_id.get(t.session_id) if t.session_id else None
+            sess = next(
+                (s for (source, external_id), s in by_id.items() if external_id == t.session_id),
+                None,
+            ) if t.session_id else None
             if sess is not None:
                 linked.add(sess.external_id)
             projects = t.projects or ([sess.directory] if sess and sess.directory else [])
@@ -64,6 +70,8 @@ class SearchService:
                     kind="zed_thread",
                     title=t.title or (sess.title if sess else ""),
                     agent_id=t.agent_id,
+                    source_id=sess.source_id if sess else None,
+                    management="zed",
                     thread_id=t.id,
                     session_id=t.session_id,
                     projects=projects,
@@ -76,15 +84,17 @@ class SearchService:
                 )
             )
 
-        if include_unlinked:
+        if include_external:
             for s in self.sessions or []:
                 if s.external_id in linked:
                     continue
                 hits.append(
                     SearchHit(
-                        kind="opencode_session",
+                        kind="external_session",
                         title=s.title,
-                        agent_id=s.source_id,
+                        agent_id=s.agent or s.source_id,
+                        source_id=s.source_id,
+                        management="external",
                         thread_id=None,
                         session_id=s.external_id,
                         projects=[s.directory] if s.directory else [],
@@ -129,7 +139,11 @@ class SearchService:
         project = (request.project or "").casefold()
 
         hits: list[SearchHit] = []
-        for hit in self._hits(request.include_unlinked):
+        for hit in self._hits(request.include_unlinked, request.scope):
+            if request.scope == SessionScope.ZED and hit.management != "zed":
+                continue
+            if request.scope == SessionScope.EXTERNAL and hit.management != "external":
+                continue
             if request.agent and hit.agent_id != request.agent:
                 continue
             if project and not any(project in p.casefold() for p in hit.projects):

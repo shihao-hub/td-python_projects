@@ -108,7 +108,7 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
     ),
     HttpEndpoint(
         method="GET", path=f"{API_PREFIX}/sessions", api_method="sessions.list",
-        summary="List agent sessions (default source: opencode), newest first.",
+        summary="List agent sessions (source=all aggregates Zed-visible and external sessions), newest first.",
         query_params=("source", "project", "agent", "archived", "limit"),
     ),
     HttpEndpoint(
@@ -129,10 +129,10 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
     ),
     HttpEndpoint(
         method="GET", path=f"{API_PREFIX}/search", api_method="search.sessions",
-        summary="Search session metadata (title/agent/id/project) across the Zed index"
-                " and OpenCode sessions; opencode content full-text search is not implemented yet.",
+        summary="Search session metadata across Zed-managed and externally discovered sessions;"
+                " content full-text search is not implemented yet.",
         query_params=("q", "agent", "project", "archived", "since", "until", "limit",
-                      "include_unlinked"),
+                      "scope", "include_unlinked"),
     ),
     HttpEndpoint(
         method="GET", path=f"{API_PREFIX}/stats/effort", api_method="stats.effort",
@@ -256,8 +256,8 @@ MCP_TOOLS: tuple[ToolMeta, ...] = (
     ),
     ToolMeta(
         name="zedhub.search.sessions", api_method="search.sessions", result_type="object",
-        summary="Search session metadata (title/agent/id/project) across the Zed index and"
-                " OpenCode sessions (content full-text search not implemented yet).",
+        summary="Search session metadata across Zed-managed and externally discovered sessions"
+                " (content full-text search not implemented yet).",
         params=(
             ParamDoc("q", "Keywords, whitespace-separated; every keyword must match."),
             ParamDoc("agent", "Exact agent id, e.g. 'opencode', 'claude-acp'."),
@@ -266,8 +266,9 @@ MCP_TOOLS: tuple[ToolMeta, ...] = (
             ParamDoc("since", "YYYY-MM-DD or ISO datetime (local time)."),
             ParamDoc("until", "YYYY-MM-DD or ISO datetime (local time)."),
             ParamDoc("limit", "Cap results; '0' means no cap (default 50)."),
+            ParamDoc("scope", "'all' (default), 'zed', or 'external'."),
             ParamDoc("include_unlinked",
-                     "'true' also lists OpenCode sessions missing from the Zed index."),
+                     "Compatibility flag: also lists externally discovered sessions."),
         ),
     ),
     ToolMeta(

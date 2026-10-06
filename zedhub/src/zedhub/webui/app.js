@@ -13,7 +13,7 @@ const el = {
   archived: document.getElementById("archived"),
   since: document.getElementById("since"),
   until: document.getElementById("until"),
-  unlinked: document.getElementById("unlinked"),
+  scope: document.getElementById("scope"),
   list: document.getElementById("list"),
   detail: document.getElementById("detail"),
   status: document.getElementById("status"),
@@ -102,8 +102,11 @@ function restoreFromUrl() {
   el.archived.value = p.get("archived") || "no";
   el.since.value = p.get("since") || "";
   el.until.value = p.get("until") || "";
-  el.unlinked.checked = p.get("include_unlinked") === "true";
-  el.agent.value = p.get("agent") || "";
+  el.scope.value = p.get("scope") || "all";
+  const requestedAgent = p.get("agent") || "";
+  el.agent.value = el.scope.value === "external" && !externalAgents.has(requestedAgent)
+    ? ""
+    : requestedAgent;
   el.project.value = p.get("project") || "";
 }
 
@@ -115,7 +118,7 @@ function readState() {
     archived: el.archived.value,
     since: el.since.value,
     until: el.until.value,
-    include_unlinked: el.unlinked.checked,
+    scope: el.scope.value,
   };
 }
 
@@ -127,7 +130,7 @@ function syncUrl(state) {
   if (state.archived && state.archived !== "no") p.set("archived", state.archived);
   if (state.since) p.set("since", state.since);
   if (state.until) p.set("until", state.until);
-  if (state.include_unlinked) p.set("include_unlinked", "true");
+  if (state.scope && state.scope !== "all") p.set("scope", state.scope);
   const qs = p.toString();
   history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
 }
@@ -135,17 +138,14 @@ function syncUrl(state) {
 /* -- 候选值（agent / 项目，来自既有只读端点） -------------------------------- */
 
 async function loadOptions() {
+  const agentCounts = new Map();
   try {
     const body = await api(`${API}/stats`);
-    const agents = Object.keys((body.data && body.data.agents) || {}).sort();
-    for (const a of agents) {
-      const opt = document.createElement("option");
-      opt.value = a;
-      opt.textContent = `${a} (${body.data.agents[a]})`;
-      el.agent.append(opt);
+    for (const [agent, count] of Object.entries((body.data && body.data.agents) || {})) {
+      agentCounts.set(agent, count);
     }
   } catch (e) {
-    showNotice(`读取 agent 列表失败：${e.message}`);
+    showNotice(`读取 Zed agent 列表失败：${e.message}`);
   }
   try {
     const body = await api(`${API}/projects`);
@@ -159,7 +159,33 @@ async function loadOptions() {
       el.project.append(opt);
     }
   } catch (e) {
-    showNotice(`读取项目列表失败：${e.message}`);
+    showNotice(`读取 Zed 项目列表失败：${e.message}`);
+  }
+  try {
+    const body = await api(`${API}/search`, { scope: "all", archived: "all", limit: 0 });
+    const hits = (body.data && body.data.hits) || [];
+    const projects = new Set();
+    for (const hit of hits) {
+      if (hit.management === "external" && hit.agent_id) externalAgents.add(hit.agent_id);
+      if (hit.agent_id && !agentCounts.has(hit.agent_id)) agentCounts.set(hit.agent_id, 1);
+      for (const project of hit.projects || []) if (project) projects.add(project);
+    }
+    for (const agent of [...agentCounts.keys()].sort()) {
+      const opt = document.createElement("option");
+      opt.value = agent;
+      opt.textContent = `${agent} (${agentCounts.get(agent)})`;
+      el.agent.append(opt);
+    }
+    const existingProjects = new Set([...el.project.options].map((option) => option.value));
+    for (const project of [...projects].sort()) {
+      if (existingProjects.has(project)) continue;
+      const opt = document.createElement("option");
+      opt.value = project;
+      opt.textContent = basename(project);
+      el.project.append(opt);
+    }
+  } catch (e) {
+    showNotice(`读取全部会话筛选项失败：${e.message}`);
   }
   restoreFromUrl();
 }
@@ -167,6 +193,7 @@ async function loadOptions() {
 /* -- 检索 -------------------------------------------------------------------- */
 
 let seq = 0;
+let externalAgents = new Set();
 
 async function runSearch() {
   const state = readState();
@@ -185,7 +212,7 @@ async function runSearch() {
       since: state.since,
       until: state.until,
       limit: 200,
-      include_unlinked: state.include_unlinked ? "true" : "",
+      scope: state.scope,
     });
   } catch (e) {
     if (mine !== seq) return;
@@ -206,7 +233,7 @@ async function runSearch() {
   if (!hits.length) {
     const p = document.createElement("p");
     p.className = "placeholder";
-    p.textContent = "没有命中。试试减少关键词、把「归档」改为「含归档」，或勾选未进 Zed 索引的 OpenCode 会话。";
+    p.textContent = "没有命中。试试减少关键词、把「归档」改为「含归档」，或切换管理范围。";
     el.list.append(p);
     return;
   }
@@ -227,7 +254,8 @@ function renderHit(hit, tokens) {
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.append(badge(hit.agent_id, "agent"));
-  meta.append(badge(hit.kind === "zed_thread" ? "Zed 索引" : "OpenCode 未关联"));
+  meta.append(badge(hit.management === "zed" ? "Zed 管理" : "外部发现", hit.management === "zed" ? "zed" : "external"));
+  if (hit.source_id) meta.append(badge(hit.source_id, "source"));
   if (hit.archived) meta.append(badge("已归档", "arch"));
   if (hit.model && hit.model.model_id) meta.append(badge(`${hit.model.provider || "?"}/${hit.model.model_id}`));
   const time = document.createElement("span");
@@ -560,9 +588,14 @@ el.form.addEventListener("submit", (e) => {
   e.preventDefault();
   runSearch().catch(() => {});
 });
-for (const node of [el.agent, el.project, el.archived, el.since, el.until, el.unlinked]) {
+for (const node of [el.agent, el.project, el.archived, el.since]) {
   node.addEventListener("change", () => runSearch().catch(() => {}));
 }
+el.scope.addEventListener("change", () => {
+  // Agent IDs are source-specific; avoid carrying a Zed-only selection into external scope.
+  el.agent.value = "";
+  runSearch().catch(() => {});
+});
 document.addEventListener("keydown", (e) => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (e.key === "/" && !typing) {

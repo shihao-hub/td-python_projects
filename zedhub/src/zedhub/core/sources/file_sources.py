@@ -10,12 +10,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
 
 from ..agent_paths import agent_data_root
 from ..errors import SourceNotSupportedError
-from ..model import Session, SessionContent, SessionListRequest
+from ..agent_sessions import scan_agent_sessions
+from ..model import Session, SessionContent, SessionListRequest, parse_ts
 from .base import AgentSource, Availability, Capability, SourceInfo
 
 # source id → 展示名（注册表顺序即 sources 查询展示顺序）
@@ -37,6 +39,38 @@ class FileSource(AgentSource):
     def __init__(self, source_id: str) -> None:
         self.source_id = source_id
 
+    def _sessions(self, request: SessionListRequest) -> list[Session]:
+        records = scan_agent_sessions(self.source_id)
+        sessions = [
+            Session(
+                source_id=self.source_id,
+                external_id=record.session_id,
+                title=record.title,
+                directory=record.directory or None,
+                agent=self.source_id,
+                created_at=parse_ts(record.time_created),
+                updated_at=parse_ts(record.time_updated),
+            )
+            for record in records
+            if record.directory
+        ]
+        project = (request.project or "").casefold()
+        if project:
+            sessions = [
+                s for s in sessions
+                if project in (s.directory or "").casefold()
+            ]
+        if request.agent:
+            sessions = [s for s in sessions if s.agent == request.agent]
+        if request.archived == "no":
+            sessions = [s for s in sessions if not s.archived]
+        elif request.archived == "only":
+            sessions = [s for s in sessions if s.archived]
+        sessions.sort(key=lambda s: s.updated_at or s.created_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        if request.limit is not None and request.limit > 0:
+            sessions = sessions[:request.limit]
+        return sessions
+
     @property
     def info(self) -> SourceInfo:
         try:
@@ -51,7 +85,7 @@ class FileSource(AgentSource):
             availability=(
                 Availability.SUPPORTED if available else Availability.UNAVAILABLE
             ),
-            capabilities=[Capability.EXPORT, Capability.LINK],
+            capabilities=[Capability.SESSIONS, Capability.DISCOVERY, Capability.EXPORT, Capability.LINK],
             note=note,
         )
 
@@ -61,10 +95,16 @@ class FileSource(AgentSource):
         )
 
     def list_sessions(self, request: SessionListRequest, *, db: Path | None = None) -> list[Session]:
-        self._reject()
+        return self._sessions(request)
 
     def get_session(self, external_id: str, *, db: Path | None = None) -> Session:
-        self._reject()
+        sessions = self._sessions(SessionListRequest(archived="all"))
+        for session in sessions:
+            if session.external_id == external_id:
+                return session
+        raise SourceNotSupportedError(
+            f"数据源 {self.source_id!r} 中未找到会话: {external_id}"
+        )
 
     def get_content(self, external_id: str, *, db: Path | None = None) -> SessionContent:
         self._reject()

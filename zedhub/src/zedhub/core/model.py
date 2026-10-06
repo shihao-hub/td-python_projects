@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import datetime, timezone
+from enum import Enum
 
 from pydantic import BaseModel
 
@@ -105,6 +106,12 @@ class SessionListRequest(BaseModel):
     limit: int | None = None
 
 
+class SessionScope(str, Enum):
+    ALL = "all"
+    ZED = "zed"
+    EXTERNAL = "external"
+
+
 # -- 会话元数据检索（一期：只搜元数据，不做正文全文索引） ---------------------
 
 
@@ -118,15 +125,18 @@ class SearchRequest(BaseModel):
     since: datetime | None = None
     until: datetime | None = None
     limit: int | None = None      # 0 = 不限制；None = 调用方默认
-    include_unlinked: bool = False  # 是否补上未进 Zed 索引的 OpenCode 会话
+    scope: SessionScope = SessionScope.ALL  # all / zed / external
+    include_unlinked: bool = False  # 兼容旧客户端：补上所有外部会话
 
 
 class SearchHit(BaseModel):
-    """统一检索结果条目：Zed 索引线程与 OpenCode 会话同形投影。"""
+    """统一检索结果条目：Zed 索引线程与外部会话同形投影。"""
 
-    kind: str                     # "zed_thread" | "opencode_session"
+    kind: str                     # "zed_thread" | "external_session"
     title: str
     agent_id: str
+    source_id: str | None = None
+    management: str = "zed"      # "zed" | "external"
     thread_id: str | None = None  # Zed 索引 thread uuid
     session_id: str | None = None  # agent 侧会话 id
     projects: list[str] = []
