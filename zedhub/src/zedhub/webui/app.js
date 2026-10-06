@@ -415,10 +415,10 @@ async function openHit(hit) {
       b.textContent = "轨迹加载中…";
       try {
         const body = await api(`${API}/trajectory/${encodeURIComponent(sid)}`,
-          { source: isOpencode ? "opencode" : src });
+          { source: isOpencode ? "opencode" : src, thread_id: hit.thread_id || "" });
         renderTrajectory(body.data);
       } catch (e) {
-        showNotice(`加载轨迹失败：${e.message}`);
+        renderTrajectory({ source: src, count: 0, file: "", events: [], error: e.message });
       } finally {
         b.disabled = false;
         b.textContent = "查看轨迹";
@@ -493,15 +493,28 @@ function renderTrajectory(data) {
   if (ph) ph.remove();
   const wrap = document.createElement("div");
   wrap.className = "trajectory";
-  if (/antigravity/i.test(data.source || "")) {
+  if (/antigravity/i.test(data.source || "")
+      && (data.events || []).some((e) => (e.text || "").includes("<undecoded"))) {
     const note = document.createElement("div");
     note.className = "degraded-note";
-    note.textContent = "Antigravity 步骤为快照降级显示：step_payload 是无公开 schema 的 protobuf，只读展示可读列与长度预览。";
+    note.textContent = "部分步骤未能解开（无公开 schema 的 protobuf 新字段），显示为占位；其余步骤为真实文本。";
     wrap.append(note);
   }
   const h3 = document.createElement("h3");
   h3.textContent = `轨迹 · ${data.source} · ${data.count} 步 · ${data.file || ""}`;
   wrap.append(h3);
+  if (data.mapped_to) {
+    const note = document.createElement("div");
+    note.className = "degraded-note";
+    note.textContent = `经目录映射找到本地文件（Zed 会话 ${data.mapped_from} → 源文件 ${data.mapped_to}）。`;
+    wrap.append(note);
+  }
+  if (data.error) {
+    const note = document.createElement("div");
+    note.className = "degraded-note";
+    note.textContent = `未能加载轨迹：${data.error}`;
+    wrap.append(note);
+  }
   for (const e of data.events || []) {
     const cls = e.role === "tool_call" ? "tool" : e.role === "tool_result" ? "result"
       : e.role === "thinking" ? "think" : e.role === "user" ? "user" : "sys";

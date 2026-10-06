@@ -258,7 +258,7 @@ def _trajectory(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     from pathlib import Path as _P
 
     from .core.agent_paths import locate_session_files
-    from .core.trajectory import load_trajectory
+    from .core.trajectory import load_trajectory, resolve_by_directory
 
     sid = _opt_str(params, "session_id")
     if sid is None:
@@ -275,6 +275,26 @@ def _trajectory(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     else:
         files = locate_session_files(source, [sid]).get(sid, [])
     if not files:
+        # Zed 索引 id 与源文件 sid 两套 ID：用线程目录+时间回退映射
+        thread_id = _opt_str(params, "thread_id")
+        if thread_id and source in ("claude-code", "codex", "antigravity",
+                                    "antigravity-desktop"):
+            with open_snapshot(ctx.zed_db) as snap:
+                with ZedDb(snap) as db:
+                    t = ThreadService(db).get_thread(thread_id)
+            projects = getattr(t, "projects", []) or []
+            near = t.created_at.timestamp() if getattr(t, "created_at", None) else 0.0
+            files, matched, candidates = resolve_by_directory(
+                source=source, directory=projects[0] if projects else "", near_ts=near)
+            if files:
+                out = load_trajectory(source=source, files=files, limit=min(limit, 2000))
+                out["mapped_from"] = sid
+                out["mapped_to"] = matched
+                return out
+            raise InvalidParamsError(
+                f"trajectory not found: {source}/{sid}（本地源文件无此 id"
+                f"{f'，同目录候选 {candidates} 个但时间差距过大' if candidates else ''}"
+                "；终端直跑未进索引的会话后续支持按目录浏览）")
         raise InvalidParamsError(f"trajectory not found: {source}/{sid}")
     return load_trajectory(source=source, files=files, limit=min(limit, 2000))
 

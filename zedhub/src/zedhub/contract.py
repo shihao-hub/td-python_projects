@@ -125,7 +125,7 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
         method="GET", path=f"{API_PREFIX}/trajectory/{{session_id}}", api_method="trajectory.show",
         summary="Unified trajectory timeline (claude-code/codex/opencode/antigravity/antigravity-desktop).",
         path_params=("session_id",),
-        query_params=("source", "limit"),
+        query_params=("source", "limit", "thread_id"),
     ),
     HttpEndpoint(
         method="GET", path=f"{API_PREFIX}/search", api_method="search.sessions",
