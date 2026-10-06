@@ -20,7 +20,7 @@ UI_PATH = "/ui"
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 # 静态资源白名单后缀（含路径分隔符/隐藏文件的请求一律拒绝）
-ALLOWED_SUFFIXES = {".html", ".js", ".css", ".svg", ".ico", ".png"}
+ALLOWED_SUFFIXES = {".html", ".js", ".css", ".svg", ".ico", ".png", ".json"}
 
 
 def _host_allowed(request: Request) -> bool:

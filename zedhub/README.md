@@ -141,10 +141,13 @@ daemon 同时监听 `127.0.0.1:8765` 的 WebSocket 通道（仅 `threads.list` �
 uv run zedhub search zedhub                       # 关键词检索
 uv run zedhub search "zedhub 搜索" --archived all  # 多关键词 AND + 含归档
 uv run zedhub search --agent opencode --since 2026-09-01 --json
+uv run zedhub ui --app                             # 启动并以 Chrome/Edge 独立应用窗口打开（可视化面板）
 uv run zedhub ui                                  # 打开 Web 检索页（--print 只打印 URL）
 ```
 
 ## Web 检索页（`/ui`）
+
+- **独立面板与 PWA**：支持 `zedhub ui --app` 自动检测 Chrome / Edge 并以独立应用窗口（无地址栏/沉浸面板）打开；同时提供 PWA `manifest.json` 与专属图标，可直接由浏览器安装至系统桌面；
 
 - 地址：`http://127.0.0.1:8766/ui`（端口随 daemon；`zedhub ui` 会按地址发现打开正确地址）；
 - 形态：搜索框（`/` 聚焦、`Esc` 清空、输入防抖）+ 过滤行（agent/项目/归档三态/起止日期/
@@ -163,6 +166,7 @@ uv run zedhub serve                          # 前台启动 daemon
 uv run zedhub sessions list --project xxx    # 会话列表（zed_linked 标记）
 uv run zedhub sessions content ses_xxx --format markdown -o out.md
 uv run zedhub search zedhub --archived all   # 元数据检索（CLI 壳）
+uv run zedhub ui --app                       # 独立应用窗口打开可视化面板（Chrome/Edge）
 uv run zedhub ui                             # 打开 Web 检索页
 uv run zedhub stats effort                   # 启动模型 × 档位统计（--watch）
 uv run zedhub sessions link <dir>            # 补登 dry-run（--apply 才写）

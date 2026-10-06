@@ -636,10 +636,68 @@ def search(
 # -- ui（打开 daemon 托管的检索页；地址解析不触发业务） -------------------------
 
 
+def _launch_app_window(url: str) -> bool:
+    """Attempt to launch URL in a standalone Chromium app window (Chrome / Edge)."""
+    import os
+    import shutil
+    import subprocess
+
+    candidates = [
+        "chrome",
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+        "msedge",
+        "microsoft-edge",
+    ]
+    for c in candidates:
+        found = shutil.which(c)
+        if found:
+            try:
+                subprocess.Popen([found, f"--app={url}"])
+                return True
+            except OSError:
+                continue
+
+    # Windows 常见路径
+    win_paths = [
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+    ]
+    for candidate_path in win_paths:
+        if os.path.isfile(candidate_path):
+            try:
+                subprocess.Popen([candidate_path, f"--app={url}"])
+                return True
+            except OSError:
+                continue
+
+    # macOS 常见路径
+    mac_paths = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ]
+    for candidate_path in mac_paths:
+        if os.path.isfile(candidate_path):
+            try:
+                subprocess.Popen([candidate_path, f"--app={url}"])
+                return True
+            except OSError:
+                continue
+
+    return False
+
+
 @app.command()
 def ui(
     host: HOST_OPT = None,
     print_only: Annotated[bool, typer.Option("--print", help="Only print the URL; do not open a browser.")] = False,
+    app_mode: Annotated[bool, typer.Option("--app", help="Launch as standalone Chrome/Edge application window.")] = False,
 ) -> None:
     """Open the local session search page (served by the daemon)."""
     import webbrowser
@@ -650,5 +708,10 @@ def ui(
     print(url)
     if print_only:
         return
+    if app_mode:
+        if _launch_app_window(url):
+            return
+        typer.secho("zedhub: 未找到 Chrome/Edge 应用模式支持，回退到普通浏览器打开", fg=typer.colors.YELLOW, err=True)
+
     if not webbrowser.open(url):  # 无可用浏览器时不报错，URL 已打印可手粘
         typer.secho("zedhub: 未能自动打开浏览器，请手动访问上面的地址", fg=typer.colors.YELLOW, err=True)

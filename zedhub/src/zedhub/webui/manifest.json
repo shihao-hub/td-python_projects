@@ -1,0 +1,17 @@
+{
+  "name": "ZedHub 会话面板",
+  "short_name": "ZedHub",
+  "description": "Zed + OpenCode agent 会话统一检索与管理面板",
+  "start_url": "/ui",
+  "scope": "/ui",
+  "display": "standalone",
+  "background_color": "#18181b",
+  "theme_color": "#18181b",
+  "icons": [
+    {
+      "src": "/ui/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
