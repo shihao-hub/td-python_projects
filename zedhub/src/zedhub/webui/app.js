@@ -96,17 +96,35 @@ function showNotice(text) {
 
 /* -- 表单状态 <-> URL（刷新/分享保持检索条件） -------------------------------- */
 
+let seq = 0;
+let externalAgents = new Set();
+let zedAgents = new Set();
+
+function setAgentValue(agentId, scope) {
+  if (!agentId) {
+    el.agent.value = "";
+    return;
+  }
+  const targetScope = scope || el.scope.value;
+  const options = Array.from(el.agent.options);
+  const matched = options.find((o) => o.value === agentId && o.dataset.management === targetScope)
+    || options.find((o) => o.value === agentId);
+  if (matched) {
+    matched.selected = true;
+  } else {
+    el.agent.value = "";
+  }
+}
+
 function restoreFromUrl() {
   const p = new URLSearchParams(location.search);
   el.q.value = p.get("q") || "";
   el.archived.value = p.get("archived") || "no";
   el.since.value = p.get("since") || "";
   el.until.value = p.get("until") || "";
-  el.scope.value = p.get("scope") || "all";
+  el.scope.value = p.get("scope") || "zed";
   const requestedAgent = p.get("agent") || "";
-  el.agent.value = el.scope.value === "external" && !externalAgents.has(requestedAgent)
-    ? ""
-    : requestedAgent;
+  setAgentValue(requestedAgent, el.scope.value);
   el.project.value = p.get("project") || "";
 }
 
@@ -130,7 +148,7 @@ function syncUrl(state) {
   if (state.archived && state.archived !== "no") p.set("archived", state.archived);
   if (state.since) p.set("since", state.since);
   if (state.until) p.set("until", state.until);
-  if (state.scope && state.scope !== "all") p.set("scope", state.scope);
+  if (state.scope && state.scope !== "zed") p.set("scope", state.scope);
   const qs = p.toString();
   history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
 }
@@ -138,11 +156,12 @@ function syncUrl(state) {
 /* -- 候选值（agent / 项目，来自既有只读端点） -------------------------------- */
 
 async function loadOptions() {
-  const agentCounts = new Map();
+  const zedAgentCounts = new Map();
+  const extAgentCounts = new Map();
   try {
     const body = await api(`${API}/stats`);
     for (const [agent, count] of Object.entries((body.data && body.data.agents) || {})) {
-      agentCounts.set(agent, count);
+      zedAgentCounts.set(agent, count);
     }
   } catch (e) {
     showNotice(`读取 Zed agent 列表失败：${e.message}`);
@@ -165,19 +184,62 @@ async function loadOptions() {
     const body = await api(`${API}/search`, { scope: "all", archived: "all", limit: 0 });
     const hits = (body.data && body.data.hits) || [];
     const projects = new Set();
+    const searchZedCounts = new Map();
+    const searchExtCounts = new Map();
     for (const hit of hits) {
-      if (hit.management === "external" && hit.agent_id) externalAgents.add(hit.agent_id);
-      if (hit.agent_id && !agentCounts.has(hit.agent_id)) agentCounts.set(hit.agent_id, 1);
+      const aid = hit.agent_id;
+      if (!aid) continue;
+      if (hit.management === "zed") {
+        searchZedCounts.set(aid, (searchZedCounts.get(aid) || 0) + 1);
+      } else if (hit.management === "external") {
+        searchExtCounts.set(aid, (searchExtCounts.get(aid) || 0) + 1);
+      }
       for (const project of hit.projects || []) if (project) projects.add(project);
     }
-    for (const agent of [...agentCounts.keys()].sort()) {
-      const opt = document.createElement("option");
-      opt.value = agent;
-      opt.textContent = `${agent} (${agentCounts.get(agent)})`;
-      el.agent.append(opt);
+    for (const [aid, count] of searchZedCounts.entries()) {
+      zedAgentCounts.set(aid, count);
     }
+    for (const [aid, count] of searchExtCounts.entries()) {
+      extAgentCounts.set(aid, count);
+    }
+
+    zedAgents = new Set(zedAgentCounts.keys());
+    externalAgents = new Set(extAgentCounts.keys());
+
+    el.agent.replaceChildren();
+    const allOpt = document.createElement("option");
+    allOpt.value = "";
+    allOpt.textContent = "全部";
+    el.agent.append(allOpt);
+
+    if (zedAgentCounts.size > 0) {
+      const groupZed = document.createElement("optgroup");
+      groupZed.label = "Zed 管理 (ACP)";
+      for (const agent of [...zedAgentCounts.keys()].sort((a, b) => a.localeCompare(b))) {
+        const opt = document.createElement("option");
+        opt.value = agent;
+        opt.dataset.management = "zed";
+        opt.textContent = `${agent} (${zedAgentCounts.get(agent)})`;
+        groupZed.append(opt);
+      }
+      el.agent.append(groupZed);
+    }
+
+    if (extAgentCounts.size > 0) {
+      const groupExt = document.createElement("optgroup");
+      groupExt.label = "外部发现";
+      for (const agent of [...extAgentCounts.keys()].sort((a, b) => a.localeCompare(b))) {
+        const opt = document.createElement("option");
+        opt.value = agent;
+        opt.dataset.management = "external";
+        opt.textContent = `${agent} (${extAgentCounts.get(agent)})`;
+        groupExt.append(opt);
+      }
+      el.agent.append(groupExt);
+    }
+
     const existingProjects = new Set([...el.project.options].map((option) => option.value));
-    for (const project of [...projects].sort()) {
+    for (const project of [...projects].sort((a, b) => a.localeCompare(b))) {
       if (existingProjects.has(project)) continue;
       const opt = document.createElement("option");
       opt.value = project;
@@ -191,9 +253,6 @@ async function loadOptions() {
 }
 
 /* -- 检索 -------------------------------------------------------------------- */
-
-let seq = 0;
-let externalAgents = new Set();
 
 async function runSearch() {
   const state = readState();
@@ -588,14 +647,31 @@ el.form.addEventListener("submit", (e) => {
   e.preventDefault();
   runSearch().catch(() => {});
 });
-for (const node of [el.agent, el.project, el.archived, el.since]) {
-  node.addEventListener("change", () => runSearch().catch(() => {}));
-}
-el.scope.addEventListener("change", () => {
-  // Agent IDs are source-specific; avoid carrying a Zed-only selection into external scope.
-  el.agent.value = "";
+el.agent.addEventListener("change", () => {
+  const selectedOpt = el.agent.selectedOptions[0];
+  const m = selectedOpt && selectedOpt.dataset.management;
+  if (m === "external" && el.scope.value === "zed") {
+    el.scope.value = "external";
+  } else if (m === "zed" && el.scope.value === "external") {
+    el.scope.value = "zed";
+  }
   runSearch().catch(() => {});
 });
+
+el.scope.addEventListener("change", () => {
+  const selectedOpt = el.agent.selectedOptions[0];
+  const m = selectedOpt && selectedOpt.dataset.management;
+  if (el.scope.value === "zed" && m === "external") {
+    el.agent.value = "";
+  } else if (el.scope.value === "external" && m === "zed") {
+    el.agent.value = "";
+  }
+  runSearch().catch(() => {});
+});
+
+for (const node of [el.project, el.archived, el.since, el.until]) {
+  node.addEventListener("change", () => runSearch().catch(() => {}));
+}
 document.addEventListener("keydown", (e) => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (e.key === "/" && !typing) {

@@ -66,3 +66,17 @@ def test_cli_ui_help_contains_app_option() -> None:
     result = runner.invoke(app, ["ui", "--help"])
     assert result.exit_code == 0
     assert "--app" in result.stdout
+
+
+def test_webui_default_scope_and_agent_hierarchy_contract() -> None:
+    # 1. 验证 index.html 默认范围为 Zed 管理
+    index_html = (WEBUI_DIR / "index.html").read_text(encoding="utf-8")
+    assert '<option value="zed" selected>Zed 管理</option>' in index_html
+
+    # 2. 验证 app.js 包含层级 optgroup 与默认 scope="zed" 逻辑
+    app_js = (WEBUI_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'groupZed.label = "Zed 管理 (ACP)"' in app_js
+    assert 'groupExt.label = "外部发现"' in app_js
+    assert 'el.scope.value = p.get("scope") || "zed"' in app_js
+    assert 'state.scope !== "zed"' in app_js
+
