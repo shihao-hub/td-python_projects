@@ -233,7 +233,7 @@ def _sessions_list(params: dict, ctx: CallContext, progress=noop_progress) -> An
     if source_id == "all":
         sessions = []
         for src in list_source_infos():
-            if src.source_id not in ("opencode", "claude-code", "codex", "antigravity"):
+            if src.source_id not in ("opencode", "claude-code", "codex", "pi", "antigravity"):
                 continue
             try:
                 source_request = request.model_copy(update={"limit": None})

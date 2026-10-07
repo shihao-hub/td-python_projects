@@ -14,9 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
 
-from ..agent_paths import agent_data_root
-from ..errors import SourceNotSupportedError
+from ..agent_paths import agent_data_root, locate_session_files
+from ..errors import NotFoundError, SourceNotSupportedError
 from ..agent_sessions import scan_agent_sessions
+from ..message_extractor import extract_claude_messages, extract_codex_messages, extract_pi_messages
 from ..model import Session, SessionContent, SessionListRequest, parse_ts
 from .base import AgentSource, Availability, Capability, SourceInfo
 
@@ -24,6 +25,7 @@ from .base import AgentSource, Availability, Capability, SourceInfo
 FILE_SOURCE_DISPLAY_NAMES: dict[str, str] = {
     "claude-code": "Claude Code (Zed ACP)",
     "codex": "Codex (Zed ACP)",
+    "pi": "Pi (Zed ACP)",
     "antigravity": "Antigravity (Zed ACP)",
 }
 
@@ -79,13 +81,16 @@ class FileSource(AgentSource):
             note = None if available else f"数据根目录不存在: {root}"
         except Exception:  # 未知 source 不会注册到本类，防御性兜底
             available, note = False, "数据根不可探测"
+        capabilities = [Capability.SESSIONS, Capability.DISCOVERY, Capability.EXPORT, Capability.LINK]
+        if self.source_id in ("claude-code", "codex", "pi"):
+            capabilities.append(Capability.CONTENT)
         return SourceInfo(
             source_id=self.source_id,
             display_name=FILE_SOURCE_DISPLAY_NAMES.get(self.source_id, self.source_id),
             availability=(
                 Availability.SUPPORTED if available else Availability.UNAVAILABLE
             ),
-            capabilities=[Capability.SESSIONS, Capability.DISCOVERY, Capability.EXPORT, Capability.LINK],
+            capabilities=capabilities,
             note=note,
         )
 
@@ -102,9 +107,42 @@ class FileSource(AgentSource):
         for session in sessions:
             if session.external_id == external_id:
                 return session
-        raise SourceNotSupportedError(
+        found = locate_session_files(self.source_id, [external_id])
+        files = found.get(external_id, [])
+        if files:
+            p = files[0]
+            stat = p.stat()
+            return Session(
+                source_id=self.source_id,
+                external_id=external_id,
+                title=f"Session {external_id[:8]}",
+                directory=str(p.parent),
+                agent=self.source_id,
+                created_at=datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc),
+                updated_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            )
+        raise NotFoundError(
             f"数据源 {self.source_id!r} 中未找到会话: {external_id}"
         )
 
     def get_content(self, external_id: str, *, db: Path | None = None) -> SessionContent:
-        self._reject()
+        if self.source_id not in ("claude-code", "codex", "pi"):
+            self._reject()
+
+        session = self.get_session(external_id, db=db)
+        found = locate_session_files(self.source_id, [external_id])
+        files = found.get(external_id, [])
+        if not files:
+            raise NotFoundError(f"未找到会话数据文件: {external_id} (source={self.source_id})")
+
+        path = files[0]
+        if self.source_id == "claude-code":
+            messages = extract_claude_messages(path)
+        elif self.source_id == "codex":
+            messages = extract_codex_messages(path)
+        elif self.source_id == "pi":
+            messages = extract_pi_messages(path)
+        else:
+            self._reject()
+
+        return SessionContent(session=session, messages=messages)

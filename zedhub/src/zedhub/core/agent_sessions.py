@@ -302,6 +302,73 @@ def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
     return records
 
 
+def _scan_pi(home: Path | None) -> list[AgentSessionRecord]:
+    base = agent_data_root("pi", home=home) / "agent" / "sessions"
+    records: list[AgentSessionRecord] = []
+    if not base.is_dir():
+        return records
+    for f in sorted(base.glob("*/*.jsonl")):
+        sid: str | None = None
+        first_ts: str | None = None
+        cwd: str | None = None
+        title: str | None = None
+        with f.open(encoding="utf-8", errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if i >= _HEAD_LINES:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                if obj.get("type") == "session":
+                    sid = sid or obj.get("id")
+                    cwd = cwd or obj.get("cwd")
+                    first_ts = first_ts or obj.get("timestamp")
+                elif (
+                    title is None
+                    and obj.get("type") == "message"
+                    and isinstance(obj.get("message"), dict)
+                ):
+                    m = obj["message"]
+                    if m.get("role") == "user":
+                        c = m.get("content")
+                        if isinstance(c, str):
+                            title = c.strip()[:100]
+                        elif isinstance(c, list):
+                            for p in c:
+                                if isinstance(p, dict) and p.get("type") == "text":
+                                    title = (p.get("text") or "").strip()[:100]
+                                    break
+                if sid and cwd and title:
+                    break
+        if not sid:
+            stem = f.stem
+            if "_" in stem:
+                sid = stem.split("_", 1)[1]
+            else:
+                sid = stem
+        created = iso_z_to_zed_ts(first_ts or "")
+        updated = iso_z_to_zed_ts(_tail_timestamp(f) or "") or created
+        if created is None:
+            created = mtime_ns_to_zed_ts(f.stat().st_mtime_ns)
+            updated = updated or created
+        records.append(
+            AgentSessionRecord(
+                session_id=sid,
+                directory=os.path.normpath(cwd) if cwd else "",
+                title=title or "",
+                time_created=created,
+                time_updated=updated or created,
+            )
+        )
+    return _dedupe_records(records)
+
+
 def scan_agent_sessions(source: str, *, home: Path | None = None) -> list[AgentSessionRecord]:
     """扫描一个文件级源的全会话元数据（link 补登的数据面）。
 
@@ -315,6 +382,8 @@ def scan_agent_sessions(source: str, *, home: Path | None = None) -> list[AgentS
         return _scan_codex(home)
     if source == "antigravity":
         return _scan_antigravity(home)
+    if source in ("pi", "pi-acp"):
+        return _scan_pi(home)
     raise SourceNotSupportedError(
         f"数据源未支持: {source}；link 已支持: opencode, " + ", ".join(FILE_SOURCES)
     )

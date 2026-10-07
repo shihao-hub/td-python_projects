@@ -22,16 +22,19 @@ SOURCE_AGENT_IDS: dict[str, str] = {
     "claude-code": "claude-acp",
     "codex": "codex-acp",
     "antigravity": "antigravity-acp",
+    "pi": "pi-acp",
+    "pi-acp": "pi-acp",
 }
 
 # 归档 schema v2 覆盖的文件级源（opencode 走 v1 专用路径，不经本模块）
-FILE_SOURCES: tuple[str, ...] = ("claude-code", "codex", "antigravity")
+FILE_SOURCES: tuple[str, ...] = ("claude-code", "codex", "antigravity", "pi")
 
 # 各源数据根目录名（相对用户 home）
 _DATA_ROOT_NAMES: dict[str, str] = {
     "claude-code": ".claude",
     "codex": ".codex",
     "antigravity": ".gemini",
+    "pi": ".pi",
 }
 
 
@@ -67,6 +70,8 @@ def locate_session_files(
     返回 ``{sid: [文件, ...]}``；未命中的 sid 不出现在结果里（调用方据此
     统计 missing）。目录不存在时安静返回空 dict（如实按 missing 报告）。
     """
+    if isinstance(session_ids, str):
+        session_ids = [session_ids]
     wanted = set(session_ids)
     found: dict[str, list[Path]] = {}
     if not wanted:
@@ -92,6 +97,13 @@ def locate_session_files(
             for sid in wanted:
                 for name in (f"{sid}.db", f"{sid}.meta"):
                     f = base / name
+                    if f.is_file():
+                        found.setdefault(sid, []).append(f)
+    elif source in ("pi", "pi-acp"):
+        base = root / "agent" / "sessions"
+        if base.is_dir():
+            for sid in wanted:
+                for f in base.glob(f"*/*{sid}*.jsonl"):
                     if f.is_file():
                         found.setdefault(sid, []).append(f)
     else:

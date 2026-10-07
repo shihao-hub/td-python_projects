@@ -18,7 +18,14 @@ from ..errors import SourceNotSupportedError
 from ..model import Session, SessionContent, SessionListRequest
 
 # 规划中但未实现的 source（Availability.NOT_IMPLEMENTED 的固定清单）
-PLANNED_SOURCES: tuple[str, ...] = ("pi",)
+PLANNED_SOURCES: tuple[str, ...] = ()
+
+SOURCE_ALIASES: dict[str, str] = {
+    "claude-acp": "claude-code",
+    "codex-acp": "codex",
+    "antigravity-acp": "antigravity",
+    "pi-acp": "pi",
+}
 
 
 class Availability(str, Enum):
@@ -74,6 +81,7 @@ SOURCES: dict[str, AgentSource] = {}
 def get_source(source_id: str | None) -> AgentSource:
     """按 id 取已实现 source；未注册 id 一律 source_not_supported。"""
     sid = (source_id or "opencode").strip()
+    sid = SOURCE_ALIASES.get(sid, sid)
     src = SOURCES.get(sid)
     if src is None:
         planned = "（规划中，尚未实现）" if sid in PLANNED_SOURCES else ""

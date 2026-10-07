@@ -212,10 +212,17 @@ async function loadOptions() {
     allOpt.textContent = "全部";
     el.agent.append(allOpt);
 
+    const sortAgentsByCount = (map) => {
+      return [...map.keys()].sort((a, b) => {
+        const diff = (map.get(b) || 0) - (map.get(a) || 0);
+        return diff !== 0 ? diff : a.localeCompare(b);
+      });
+    };
+
     if (zedAgentCounts.size > 0) {
       const groupZed = document.createElement("optgroup");
       groupZed.label = "Zed 管理 (ACP)";
-      for (const agent of [...zedAgentCounts.keys()].sort((a, b) => a.localeCompare(b))) {
+      for (const agent of sortAgentsByCount(zedAgentCounts)) {
         const opt = document.createElement("option");
         opt.value = agent;
         opt.dataset.management = "zed";
@@ -228,7 +235,7 @@ async function loadOptions() {
     if (extAgentCounts.size > 0) {
       const groupExt = document.createElement("optgroup");
       groupExt.label = "外部发现";
-      for (const agent of [...extAgentCounts.keys()].sort((a, b) => a.localeCompare(b))) {
+      for (const agent of sortAgentsByCount(extAgentCounts)) {
         const opt = document.createElement("option");
         opt.value = agent;
         opt.dataset.management = "external";
@@ -464,14 +471,24 @@ async function openHit(hit) {
     ["会话 id", hit.session_id, true],
   ];
 
-  const isOpencode = hit.kind === "opencode_session" || Boolean(hit.model);
+  let agentSource = hit.source_id || "";
+  const aid = (hit.agent_id || "").toLowerCase();
+  if (!agentSource) {
+    if (aid.includes("codex")) agentSource = "codex";
+    else if (aid.includes("claude")) agentSource = "claude-code";
+    else if (aid.includes("pi")) agentSource = "pi";
+    else if (aid.includes("antigravity")) agentSource = "antigravity";
+    else agentSource = "opencode";
+  }
+  const hasContentSupport = ["opencode", "claude-code", "codex", "pi"].includes(agentSource);
+
   let contentLoader = null;
-  if (isOpencode && hit.session_id) {
+  if (hasContentSupport && hit.session_id) {
     contentLoader = actionButton("加载正文", async (b) => {
       b.disabled = true;
       b.textContent = "加载中…";
       try {
-        const body = await api(`${API}/sessions/${encodeURIComponent(hit.session_id)}/content`, { source: "opencode" });
+        const body = await api(`${API}/sessions/${encodeURIComponent(hit.session_id)}/content`, { source: agentSource });
         renderMessages(body.data, hit);
       } catch (e) {
         b.disabled = false;
@@ -494,15 +511,13 @@ async function openHit(hit) {
 
   if (hit.session_id || hit.thread_id) {
     const sid = hit.session_id || hit.thread_id;
-    const src = (hit.agent_id || "").includes("codex") ? "codex"
-      : (hit.agent_id || "").includes("claude") ? "claude-code"
-      : (hit.agent_id || "").includes("antigravity") ? "antigravity" : "opencode";
+    const src = agentSource;
     actions.push(actionButton("查看轨迹", async (b) => {
       b.disabled = true;
       b.textContent = "轨迹加载中…";
       try {
         const body = await api(`${API}/trajectory/${encodeURIComponent(sid)}`,
-          { source: isOpencode ? "opencode" : src, thread_id: hit.thread_id || "" });
+          { source: src, thread_id: hit.thread_id || "" });
         renderTrajectory(body.data);
       } catch (e) {
         renderTrajectory({ source: src, count: 0, file: "", events: [], error: e.message });
@@ -528,7 +543,9 @@ async function openHit(hit) {
       ["归档", t.archived ? "是" : "否"],
       ["线程 id", t.id, true],
       ["会话 id", t.session_id, true],
-      isOpencode ? ["正文", "点上方「加载正文」（OpenCode 结构化源）"] : ["正文", `该会话属 ${t.agent_id}，无结构化正文源（仅 Zed 索引可见）`],
+      hasContentSupport
+        ? ["正文", `点上方「加载正文」（${agentSource} 对话气泡）`]
+        : ["正文", t.agent_id === "antigravity" ? "该会话属 antigravity，protobuf 存储待逆向（可点「查看轨迹」）" : `该会话属 ${t.agent_id}，无结构化正文源（仅 Zed 索引可见）`],
     ], actions);
   }
 }
