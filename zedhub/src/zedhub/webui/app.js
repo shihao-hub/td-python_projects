@@ -480,7 +480,7 @@ async function openHit(hit) {
     else if (aid.includes("antigravity")) agentSource = "antigravity";
     else agentSource = "opencode";
   }
-  const hasContentSupport = ["opencode", "claude-code", "codex", "pi"].includes(agentSource);
+  const hasContentSupport = ["opencode", "claude-code", "codex", "pi", "antigravity"].includes(agentSource);
 
   let contentLoader = null;
   if (hasContentSupport && hit.session_id) {
@@ -545,7 +545,7 @@ async function openHit(hit) {
       ["会话 id", t.session_id, true],
       hasContentSupport
         ? ["正文", `点上方「加载正文」（${agentSource} 对话气泡）`]
-        : ["正文", t.agent_id === "antigravity" ? "该会话属 antigravity，protobuf 存储待逆向（可点「查看轨迹」）" : `该会话属 ${t.agent_id}，无结构化正文源（仅 Zed 索引可见）`],
+        : ["正文", `该会话属 ${hit.agent_id}，无结构化正文源（仅 Zed 索引可见）`],
     ], actions);
   }
 }
