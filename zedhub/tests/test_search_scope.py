@@ -42,3 +42,40 @@ def test_scope_filters_zed_and_external() -> None:
 
     assert service.search(SearchRequest(scope=SessionScope.ZED)).total == 1
     assert service.search(SearchRequest(scope=SessionScope.EXTERNAL)).total == 1
+
+
+def test_search_project_normalization_slashes() -> None:
+    thread = Thread(
+        id="thread-win",
+        session_id=None,
+        agent_id="claude-acp",
+        title="Windows 反斜杠项目",
+        archived=False,
+        projects=["D:\\Users\\language_projects"],
+    )
+    external = Session(
+        source_id="claude-code",
+        external_id="claude-posix",
+        title="正斜杠项目",
+        agent="claude-code",
+        directory="D:/Users/language_projects",
+    )
+    service = SearchService(threads=[thread], sessions=[external])
+
+    # 使用正斜杠筛选，两者均能命中
+    res_slash = service.search(
+        SearchRequest(scope=SessionScope.ALL, project="D:/Users/language_projects")
+    )
+    assert res_slash.total == 2
+
+    # 使用反斜杠筛选，两者均能命中
+    res_backslash = service.search(
+        SearchRequest(scope=SessionScope.ALL, project="D:\\Users\\language_projects")
+    )
+    assert res_backslash.total == 2
+
+    # 大小写不敏感且带尾部斜杠测试
+    res_case = service.search(
+        SearchRequest(scope=SessionScope.ALL, project="d:/users/language_projects/")
+    )
+    assert res_case.total == 2

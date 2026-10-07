@@ -85,6 +85,15 @@ function basename(p) {
   return String(p).split(/[\\/]/).filter(Boolean).pop() || p;
 }
 
+function normPath(p) {
+  if (!p) return "";
+  let s = String(p).trim().replace(/\\/g, "/");
+  while (s.length > 1 && s.endsWith("/")) {
+    s = s.slice(0, -1);
+  }
+  return s.toLowerCase();
+}
+
 function setStatus(text) {
   el.status.textContent = text || "";
 }
@@ -116,6 +125,21 @@ function setAgentValue(agentId, scope) {
   }
 }
 
+function setProjectValue(projVal) {
+  if (!projVal) {
+    el.project.value = "";
+    return;
+  }
+  const normVal = normPath(projVal);
+  const options = Array.from(el.project.options);
+  const matched = options.find((o) => normPath(o.value) === normVal);
+  if (matched) {
+    matched.selected = true;
+  } else {
+    el.project.value = projVal;
+  }
+}
+
 function restoreFromUrl() {
   const p = new URLSearchParams(location.search);
   el.q.value = p.get("q") || "";
@@ -125,7 +149,8 @@ function restoreFromUrl() {
   el.scope.value = p.get("scope") || "zed";
   const requestedAgent = p.get("agent") || "";
   setAgentValue(requestedAgent, el.scope.value);
-  el.project.value = p.get("project") || "";
+  const requestedProj = p.get("project") || "";
+  setProjectValue(requestedProj);
 }
 
 function readState() {
@@ -166,36 +191,60 @@ async function loadOptions() {
   } catch (e) {
     showNotice(`读取 Zed agent 列表失败：${e.message}`);
   }
+
+  // 读取 Zed 索引中的项目
+  const zedProjectsList = [];
   try {
     const body = await api(`${API}/projects`);
-    const seen = new Set();
+    const seenZed = new Set();
     for (const p of body.data || []) {
-      if (seen.has(p.path)) continue;
-      seen.add(p.path);
-      const opt = document.createElement("option");
-      opt.value = p.path;
-      opt.textContent = `${basename(p.path)} — ${p.active} 活跃 / ${p.total} 总计`;
-      el.project.append(opt);
+      if (!p.path) continue;
+      const key = normPath(p.path);
+      if (seenZed.has(key)) continue;
+      seenZed.add(key);
+      zedProjectsList.push({
+        path: p.path,
+        norm: key,
+        active: p.active || 0,
+        total: p.total || 0,
+      });
     }
   } catch (e) {
     showNotice(`读取 Zed 项目列表失败：${e.message}`);
   }
+
   try {
     const body = await api(`${API}/search`, { scope: "all", archived: "all", limit: 0 });
     const hits = (body.data && body.data.hits) || [];
-    const projects = new Set();
     const searchZedCounts = new Map();
     const searchExtCounts = new Map();
+    const extProjectStats = new Map(); // key -> { path, norm, count }
+    const zedNormKeys = new Set(zedProjectsList.map((p) => p.norm));
+
     for (const hit of hits) {
       const aid = hit.agent_id;
-      if (!aid) continue;
-      if (hit.management === "zed") {
-        searchZedCounts.set(aid, (searchZedCounts.get(aid) || 0) + 1);
-      } else if (hit.management === "external") {
-        searchExtCounts.set(aid, (searchExtCounts.get(aid) || 0) + 1);
+      if (aid) {
+        if (hit.management === "zed") {
+          searchZedCounts.set(aid, (searchZedCounts.get(aid) || 0) + 1);
+        } else if (hit.management === "external") {
+          searchExtCounts.set(aid, (searchExtCounts.get(aid) || 0) + 1);
+        }
       }
-      for (const project of hit.projects || []) if (project) projects.add(project);
+
+      for (const project of hit.projects || []) {
+        if (!project) continue;
+        const key = normPath(project);
+        if (!zedNormKeys.has(key)) {
+          let stat = extProjectStats.get(key);
+          if (!stat) {
+            stat = { path: project, norm: key, count: 0 };
+            extProjectStats.set(key, stat);
+          }
+          stat.count += 1;
+        }
+      }
     }
+
     for (const [aid, count] of searchZedCounts.entries()) {
       zedAgentCounts.set(aid, count);
     }
@@ -245,13 +294,43 @@ async function loadOptions() {
       el.agent.append(groupExt);
     }
 
-    const existingProjects = new Set([...el.project.options].map((option) => option.value));
-    for (const project of [...projects].sort((a, b) => a.localeCompare(b))) {
-      if (existingProjects.has(project)) continue;
-      const opt = document.createElement("option");
-      opt.value = project;
-      opt.textContent = basename(project);
-      el.project.append(opt);
+    // 组织项目下拉框：全部 / Zed 管理项目 / 外部发现项目，按数量降序
+    el.project.replaceChildren();
+    const allProjOpt = document.createElement("option");
+    allProjOpt.value = "";
+    allProjOpt.textContent = "全部";
+    el.project.append(allProjOpt);
+
+    if (zedProjectsList.length > 0) {
+      const groupZedProj = document.createElement("optgroup");
+      groupZedProj.label = "Zed 管理项目";
+      const sortedZedProj = [...zedProjectsList].sort((a, b) => {
+        const diff = b.total - a.total;
+        return diff !== 0 ? diff : basename(a.path).localeCompare(basename(b.path));
+      });
+      for (const p of sortedZedProj) {
+        const opt = document.createElement("option");
+        opt.value = p.path;
+        opt.textContent = `${basename(p.path)} — ${p.active} 活跃 / ${p.total} 总计`;
+        groupZedProj.append(opt);
+      }
+      el.project.append(groupZedProj);
+    }
+
+    if (extProjectStats.size > 0) {
+      const groupExtProj = document.createElement("optgroup");
+      groupExtProj.label = "外部发现项目";
+      const sortedExtProj = [...extProjectStats.values()].sort((a, b) => {
+        const diff = b.count - a.count;
+        return diff !== 0 ? diff : basename(a.path).localeCompare(basename(b.path));
+      });
+      for (const p of sortedExtProj) {
+        const opt = document.createElement("option");
+        opt.value = p.path;
+        opt.textContent = `${basename(p.path)} — (${p.count} 会话)`;
+        groupExtProj.append(opt);
+      }
+      el.project.append(groupExtProj);
     }
   } catch (e) {
     showNotice(`读取全部会话筛选项失败：${e.message}`);

@@ -80,3 +80,15 @@ def test_webui_default_scope_and_agent_hierarchy_contract() -> None:
     assert 'el.scope.value = p.get("scope") || "zed"' in app_js
     assert 'state.scope !== "zed"' in app_js
 
+
+def test_webui_project_hierarchy_and_normalization_contract() -> None:
+    # 验证 app.js 包含项目 optgroup 分组、路径规范化与会话统计逻辑
+    app_js = (WEBUI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function normPath(p)" in app_js
+    assert "function setProjectValue(projVal)" in app_js
+    assert 'groupZedProj.label = "Zed 管理项目"' in app_js
+    assert 'groupExtProj.label = "外部发现项目"' in app_js
+    assert "extProjectStats.get(key)" in app_js
+    assert "diff = b.total - a.total" in app_js
+    assert "diff = b.count - a.count" in app_js
+

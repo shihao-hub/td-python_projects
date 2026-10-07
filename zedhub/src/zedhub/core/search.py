@@ -40,6 +40,13 @@ def _tokens(q: str | None) -> list[str]:
     return [t for t in (q or "").casefold().split() if t]
 
 
+def _norm_path(p: str | None) -> str:
+    """路径规范化：正反斜杠统一、去除末尾斜杠、小写，用于不敏感匹配。"""
+    if not p:
+        return ""
+    return p.replace("\\", "/").rstrip("/").casefold()
+
+
 class SearchService:
     """把 Zed 线程与 OpenCode 会话投影成统一条目后过滤。"""
 
@@ -137,6 +144,7 @@ class SearchService:
         tokens = _tokens(request.q)
         since, until = _utc(request.since), _utc(request.until)
         project = (request.project or "").casefold()
+        norm_proj = _norm_path(request.project)
 
         hits: list[SearchHit] = []
         for hit in self._hits(request.include_unlinked, request.scope):
@@ -146,7 +154,10 @@ class SearchService:
                 continue
             if request.agent and hit.agent_id != request.agent:
                 continue
-            if project and not any(project in p.casefold() for p in hit.projects):
+            if norm_proj and not any(
+                project in p.casefold() or norm_proj in _norm_path(p)
+                for p in hit.projects
+            ):
                 continue
             if request.archived == "no" and hit.archived:
                 continue
