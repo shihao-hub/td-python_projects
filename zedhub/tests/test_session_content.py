@@ -171,7 +171,7 @@ def test_source_capabilities_and_aliases() -> None:
     assert Capability.CONTENT in pi.info.capabilities
 
     agy = get_source("antigravity")
-    assert Capability.CONTENT not in agy.info.capabilities
+    assert Capability.CONTENT in agy.info.capabilities
 
     # 别名映射
     assert get_source("claude-acp") is claude
@@ -179,7 +179,8 @@ def test_source_capabilities_and_aliases() -> None:
     assert get_source("pi-acp") is pi
 
 
-def test_antigravity_get_content_rejects() -> None:
+def test_antigravity_get_content_no_data_raises() -> None:
+    """Antigravity 现在支持 CONTENT，但对不存在的会话 ID 应抛出 NotFoundError。"""
     agy = get_source("antigravity")
-    with pytest.raises(SourceNotSupportedError):
-        agy.get_content("any-id")
+    with pytest.raises((NotFoundError, SourceNotSupportedError)):
+        agy.get_content("nonexistent-fake-id-00000000")

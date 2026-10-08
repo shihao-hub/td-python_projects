@@ -17,6 +17,7 @@ from typing import NoReturn
 from ..agent_paths import agent_data_root, locate_session_files
 from ..errors import NotFoundError, SourceNotSupportedError
 from ..agent_sessions import scan_agent_sessions
+from ..agy_extractor import extract_agy_messages
 from ..message_extractor import extract_claude_messages, extract_codex_messages, extract_pi_messages
 from ..model import Session, SessionContent, SessionListRequest, parse_ts
 from .base import AgentSource, Availability, Capability, SourceInfo
@@ -82,7 +83,7 @@ class FileSource(AgentSource):
         except Exception:  # 未知 source 不会注册到本类，防御性兜底
             available, note = False, "数据根不可探测"
         capabilities = [Capability.SESSIONS, Capability.DISCOVERY, Capability.EXPORT, Capability.LINK]
-        if self.source_id in ("claude-code", "codex", "pi"):
+        if self.source_id in ("claude-code", "codex", "pi", "antigravity"):
             capabilities.append(Capability.CONTENT)
         return SourceInfo(
             source_id=self.source_id,
@@ -126,10 +127,21 @@ class FileSource(AgentSource):
         )
 
     def get_content(self, external_id: str, *, db: Path | None = None) -> SessionContent:
-        if self.source_id not in ("claude-code", "codex", "pi"):
+        if self.source_id not in ("claude-code", "codex", "pi", "antigravity"):
             self._reject()
 
         session = self.get_session(external_id, db=db)
+
+        # Antigravity 走独立的混合提取路径（transcript.jsonl 优先、SQLite+Proto 兜底）
+        if self.source_id == "antigravity":
+            messages = extract_agy_messages(external_id)
+            if not messages:
+                raise NotFoundError(
+                    f"未能从 Antigravity 会话中提取正文气泡: {external_id}"
+                    "（transcript.jsonl 不存在且 SQLite 解析无结果）"
+                )
+            return SessionContent(session=session, messages=messages)
+
         found = locate_session_files(self.source_id, [external_id])
         files = found.get(external_id, [])
         if not files:
