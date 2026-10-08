@@ -8,7 +8,7 @@ dependencies = [
     "pydantic>=2.7",
     "mcp==2.2.0",
     "websockets>=15,<16",
-    "starlette>=0.40,<1",
+    "starlette>=0.40,<2",
     "uvicorn>=0.30,<1",
 ]
 
