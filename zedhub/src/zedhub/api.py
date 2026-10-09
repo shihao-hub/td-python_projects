@@ -30,7 +30,7 @@ from .core.opencode_repo import OpencodeDb
 from .core.repo import ZedDb
 from .core.service import ThreadService
 from .core.snapshot import open_opencode_ro, open_snapshot
-from .core.sources import get_source, list_source_infos
+from .core.sources import Capability, get_source, list_source_infos, session_source_ids
 from .core.model import SessionListRequest
 
 # -- 调用上下文（daemon 启动参数确定的库路径） -----------------------------------
@@ -233,7 +233,7 @@ def _sessions_list(params: dict, ctx: CallContext, progress=noop_progress) -> An
     if source_id == "all":
         sessions = []
         for src in list_source_infos():
-            if src.source_id not in ("opencode", "claude-code", "codex", "pi", "antigravity"):
+            if Capability.SESSIONS not in src.capabilities:
                 continue
             try:
                 source_request = request.model_copy(update={"limit": None})
@@ -307,8 +307,7 @@ def _trajectory(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     if not files:
         # Zed 索引 id 与源文件 sid 两套 ID：用线程目录+时间回退映射
         thread_id = _opt_str(params, "thread_id")
-        if thread_id and source in ("claude-code", "codex", "antigravity",
-                                    "antigravity-desktop"):
+        if thread_id and (source == "antigravity-desktop" or source in session_source_ids()):
             with open_snapshot(ctx.zed_db) as snap:
                 with ZedDb(snap) as db:
                     t = ThreadService(db).get_thread(thread_id)
@@ -366,7 +365,7 @@ def _search(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
 
     sessions: list[Session] = []
     degraded: list[str] = []
-    sources = ("opencode", "claude-code", "codex", "antigravity")
+    sources = session_source_ids()
     for source_id in sources:
         try:
             source = get_source(source_id)

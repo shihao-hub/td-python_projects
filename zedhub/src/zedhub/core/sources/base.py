@@ -113,3 +113,12 @@ def opencode_db_available() -> bool:
     from ..snapshot import default_opencode_db_path
 
     return Path(default_opencode_db_path()).exists()
+
+
+def session_source_ids() -> tuple[str, ...]:
+    """从 SOURCES 注册表中动态提取声明了 Capability.SESSIONS 的所有源 ID（SSOT）。"""
+    return tuple(
+        info.source_id
+        for info in list_source_infos()
+        if Capability.SESSIONS in info.capabilities
+    )

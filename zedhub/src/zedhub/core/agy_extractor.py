@@ -147,20 +147,31 @@ def _parse_proto_fields(data: bytes) -> dict[int, list[Any]]:
                 break
             chunk = data[offset:offset + length]
             offset += length
-            # 尝试 UTF-8 解码为字符串
-            try:
-                text = chunk.decode("utf-8")
-                fields.setdefault(field_num, []).append(text)
-            except UnicodeDecodeError:
-                # 尝试递归解析为子消息
+            parsed = False
+            # 对已知嵌套子消息字段（如 19 用户 prompt、20 助手回复）优先尝试递归解析
+            if field_num in (19, 20):
                 try:
                     sub = _parse_proto_fields(chunk)
                     if sub:
                         fields.setdefault(field_num, []).append(sub)
-                    else:
-                        fields.setdefault(field_num, []).append(chunk)
+                        parsed = True
                 except Exception:
-                    fields.setdefault(field_num, []).append(chunk)
+                    pass
+            if not parsed:
+                # 尝试 UTF-8 解码为字符串
+                try:
+                    text = chunk.decode("utf-8")
+                    fields.setdefault(field_num, []).append(text)
+                except UnicodeDecodeError:
+                    # 尝试递归解析为子消息
+                    try:
+                        sub = _parse_proto_fields(chunk)
+                        if sub:
+                            fields.setdefault(field_num, []).append(sub)
+                        else:
+                            fields.setdefault(field_num, []).append(chunk)
+                    except Exception:
+                        fields.setdefault(field_num, []).append(chunk)
         elif wire_type == 1:  # Fixed64
             if offset + 8 > len(data):
                 break

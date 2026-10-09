@@ -20,6 +20,8 @@ import zlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .agent_paths import FILE_SOURCES
+
 
 @dataclass
 class TimelineEvent:
@@ -394,7 +396,7 @@ def resolve_by_directory(*, source: str, directory: str, near_ts: float = 0.0,
             except OSError:
                 continue
             scored.append((diff, db.stem))
-    elif source in ("claude-code", "codex", "antigravity"):
+    elif source in FILE_SOURCES:
         from .agent_sessions import scan_agent_sessions
         records = scan_agent_sessions(source, home=home)
         for r in records:

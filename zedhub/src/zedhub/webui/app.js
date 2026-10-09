@@ -13,7 +13,6 @@ const el = {
   archived: document.getElementById("archived"),
   since: document.getElementById("since"),
   until: document.getElementById("until"),
-  scope: document.getElementById("scope"),
   list: document.getElementById("list"),
   detail: document.getElementById("detail"),
   status: document.getElementById("status"),
@@ -109,20 +108,59 @@ let seq = 0;
 let externalAgents = new Set();
 let zedAgents = new Set();
 
-function setAgentValue(agentId, scope) {
-  if (!agentId) {
-    el.agent.value = "";
+function parseAgentChoice(val) {
+  if (!val || val === "scope:zed") {
+    return { scope: "zed", agent: "", raw: "scope:zed" };
+  }
+  if (val === "scope:external") {
+    return { scope: "external", agent: "", raw: "scope:external" };
+  }
+  if (val === "all:all") {
+    return { scope: "all", agent: "", raw: "all:all" };
+  }
+  if (val.startsWith("zed:")) {
+    return { scope: "zed", agent: val.slice(4), raw: val };
+  }
+  if (val.startsWith("external:")) {
+    return { scope: "external", agent: val.slice(9), raw: val };
+  }
+  return { scope: "zed", agent: val, raw: val };
+}
+
+function setAgentValue(requestedAgent, requestedScope) {
+  const options = Array.from(el.agent.options);
+  if (!requestedAgent && !requestedScope) {
+    el.agent.value = "scope:zed";
     return;
   }
-  const targetScope = scope || el.scope.value;
-  const options = Array.from(el.agent.options);
-  const matched = options.find((o) => o.value === agentId && o.dataset.management === targetScope)
-    || options.find((o) => o.value === agentId);
-  if (matched) {
-    matched.selected = true;
-  } else {
-    el.agent.value = "";
+  if (requestedAgent) {
+    const directMatch = options.find((o) => o.value === requestedAgent);
+    if (directMatch) {
+      directMatch.selected = true;
+      return;
+    }
+    const targetScope = requestedScope || "zed";
+    const prefix = targetScope === "external" ? "external:" : "zed:";
+    const compoundMatch = options.find((o) => o.value === prefix + requestedAgent);
+    if (compoundMatch) {
+      compoundMatch.selected = true;
+      return;
+    }
+    const anyMatch = options.find((o) => o.dataset.agent === requestedAgent);
+    if (anyMatch) {
+      anyMatch.selected = true;
+      return;
+    }
   }
+  if (requestedScope === "external") {
+    el.agent.value = "scope:external";
+    return;
+  }
+  if (requestedScope === "all") {
+    el.agent.value = "all:all";
+    return;
+  }
+  el.agent.value = "scope:zed";
 }
 
 function setProjectValue(projVal) {
@@ -146,34 +184,34 @@ function restoreFromUrl() {
   el.archived.value = p.get("archived") || "no";
   el.since.value = p.get("since") || "";
   el.until.value = p.get("until") || "";
-  el.scope.value = p.get("scope") || "zed";
-  const requestedAgent = p.get("agent") || "";
-  setAgentValue(requestedAgent, el.scope.value);
-  const requestedProj = p.get("project") || "";
-  setProjectValue(requestedProj);
+  setAgentValue(p.get("agent") || "", p.get("scope") || "");
+  setProjectValue(p.get("project") || "");
 }
 
 function readState() {
+  const choice = parseAgentChoice(el.agent.value);
   return {
     q: el.q.value.trim(),
-    agent: el.agent.value,
+    agent: choice.agent,
+    rawAgent: choice.raw,
     project: el.project.value,
     archived: el.archived.value,
     since: el.since.value,
     until: el.until.value,
-    scope: el.scope.value,
+    scope: choice.scope,
   };
 }
 
 function syncUrl(state) {
   const p = new URLSearchParams();
   if (state.q) p.set("q", state.q);
-  if (el.agent.value) p.set("agent", el.agent.value);
+  if (state.rawAgent && state.rawAgent !== "scope:zed") {
+    p.set("agent", state.rawAgent);
+  }
   if (el.project.value) p.set("project", el.project.value);
   if (state.archived && state.archived !== "no") p.set("archived", state.archived);
   if (state.since) p.set("since", state.since);
   if (state.until) p.set("until", state.until);
-  if (state.scope && state.scope !== "zed") p.set("scope", state.scope);
   const qs = p.toString();
   history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
 }
@@ -256,10 +294,21 @@ async function loadOptions() {
     externalAgents = new Set(extAgentCounts.keys());
 
     el.agent.replaceChildren();
-    const allOpt = document.createElement("option");
-    allOpt.value = "";
-    allOpt.textContent = "全部";
-    el.agent.append(allOpt);
+
+    const optZedAll = document.createElement("option");
+    optZedAll.value = "scope:zed";
+    optZedAll.textContent = "全部 Zed 管理会话";
+    el.agent.append(optZedAll);
+
+    const optExtAll = document.createElement("option");
+    optExtAll.value = "scope:external";
+    optExtAll.textContent = "全部外部发现会话";
+    el.agent.append(optExtAll);
+
+    const optAll = document.createElement("option");
+    optAll.value = "all:all";
+    optAll.textContent = "全部会话";
+    el.agent.append(optAll);
 
     const sortAgentsByCount = (map) => {
       return [...map.keys()].sort((a, b) => {
@@ -273,8 +322,9 @@ async function loadOptions() {
       groupZed.label = "Zed 管理 (ACP)";
       for (const agent of sortAgentsByCount(zedAgentCounts)) {
         const opt = document.createElement("option");
-        opt.value = agent;
+        opt.value = `zed:${agent}`;
         opt.dataset.management = "zed";
+        opt.dataset.agent = agent;
         opt.textContent = `${agent} (${zedAgentCounts.get(agent)})`;
         groupZed.append(opt);
       }
@@ -286,8 +336,9 @@ async function loadOptions() {
       groupExt.label = "外部发现";
       for (const agent of sortAgentsByCount(extAgentCounts)) {
         const opt = document.createElement("option");
-        opt.value = agent;
+        opt.value = `external:${agent}`;
         opt.dataset.management = "external";
+        opt.dataset.agent = agent;
         opt.textContent = `${agent} (${extAgentCounts.get(agent)})`;
         groupExt.append(opt);
       }
@@ -351,7 +402,7 @@ async function runSearch() {
   try {
     body = await api(`${API}/search`, {
       q: state.q,
-      agent: el.agent.value,
+      agent: state.agent,
       project: el.project.value,
       archived: state.archived,
       since: state.since,
@@ -400,6 +451,7 @@ function renderHit(hit, tokens) {
   meta.className = "meta";
   meta.append(badge(hit.agent_id, "agent"));
   meta.append(badge(hit.management === "zed" ? "Zed 管理" : "外部发现", hit.management === "zed" ? "zed" : "external"));
+  if (hit.mode) meta.append(badge(hit.mode, "mode"));
   if (hit.source_id) meta.append(badge(hit.source_id, "source"));
   if (hit.archived) meta.append(badge("已归档", "arch"));
   if (hit.model && hit.model.model_id) meta.append(badge(`${hit.model.provider || "?"}/${hit.model.model_id}`));
@@ -743,27 +795,7 @@ el.form.addEventListener("submit", (e) => {
   e.preventDefault();
   runSearch().catch(() => {});
 });
-el.agent.addEventListener("change", () => {
-  const selectedOpt = el.agent.selectedOptions[0];
-  const m = selectedOpt && selectedOpt.dataset.management;
-  if (m === "external" && el.scope.value === "zed") {
-    el.scope.value = "external";
-  } else if (m === "zed" && el.scope.value === "external") {
-    el.scope.value = "zed";
-  }
-  runSearch().catch(() => {});
-});
-
-el.scope.addEventListener("change", () => {
-  const selectedOpt = el.agent.selectedOptions[0];
-  const m = selectedOpt && selectedOpt.dataset.management;
-  if (el.scope.value === "zed" && m === "external") {
-    el.agent.value = "";
-  } else if (el.scope.value === "external" && m === "zed") {
-    el.agent.value = "";
-  }
-  runSearch().catch(() => {});
-});
+el.agent.addEventListener("change", () => runSearch().catch(() => {}));
 
 for (const node of [el.project, el.archived, el.since, el.until]) {
   node.addEventListener("change", () => runSearch().catch(() => {}));

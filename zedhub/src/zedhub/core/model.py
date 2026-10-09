@@ -136,6 +136,7 @@ class SearchHit(BaseModel):
     title: str
     agent_id: str
     source_id: str | None = None
+    mode: str | None = None       # 内部角色模式（如 OpenCode 的 build/plan/explore/general）
     management: str = "zed"      # "zed" | "external"
     thread_id: str | None = None  # Zed 索引 thread uuid
     session_id: str | None = None  # agent 侧会话 id

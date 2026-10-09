@@ -78,6 +78,7 @@ class SearchService:
                     title=t.title or (sess.title if sess else ""),
                     agent_id=t.agent_id,
                     source_id=sess.source_id if sess else None,
+                    mode=sess.agent if sess and sess.source_id == "opencode" else None,
                     management="zed",
                     thread_id=t.id,
                     session_id=t.session_id,
@@ -95,12 +96,19 @@ class SearchService:
             for s in self.sessions or []:
                 if s.external_id in linked:
                     continue
+                if s.source_id == "opencode":
+                    agent_id = "opencode"
+                    mode = s.agent
+                else:
+                    agent_id = s.agent or s.source_id
+                    mode = None
                 hits.append(
                     SearchHit(
                         kind="external_session",
                         title=s.title,
-                        agent_id=s.agent or s.source_id,
+                        agent_id=agent_id,
                         source_id=s.source_id,
+                        mode=mode,
                         management="external",
                         thread_id=None,
                         session_id=s.external_id,

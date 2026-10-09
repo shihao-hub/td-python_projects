@@ -11,6 +11,7 @@ from .base import (
     SourceInfo,
     get_source,
     list_source_infos,
+    session_source_ids,
 )
 from .file_sources import FILE_SOURCE_DISPLAY_NAMES, FileSource
 from .opencode_source import OpencodeSource, SOURCE_ID
@@ -30,6 +31,7 @@ __all__ = [
     "SourceInfo",
     "get_source",
     "list_source_infos",
+    "session_source_ids",
     "FileSource",
     "OpencodeSource",
     "SOURCE_ID",

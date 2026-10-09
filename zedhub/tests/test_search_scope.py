@@ -79,3 +79,50 @@ def test_search_project_normalization_slashes() -> None:
         SearchRequest(scope=SessionScope.ALL, project="d:/users/language_projects/")
     )
     assert res_case.total == 2
+
+
+def test_external_opencode_agent_normalized_and_mode_passed() -> None:
+    session = Session(
+        source_id="opencode",
+        external_id="ses-123",
+        title="写代码会话",
+        agent="build",  # 内部模式
+        directory="D:/Users/project",
+    )
+    service = SearchService(threads=[], sessions=[session])
+
+    res = service.search(SearchRequest(scope=SessionScope.EXTERNAL))
+    assert res.total == 1
+    hit = res.hits[0]
+    assert hit.agent_id == "opencode"  # 顶层归一化为 opencode
+    assert hit.mode == "build"          # 内部模式保存在 mode 字段
+    assert hit.management == "external"
+
+    # 按 agent="opencode" 能够正常查出
+    res_filtered = service.search(SearchRequest(scope=SessionScope.EXTERNAL, agent="opencode"))
+    assert res_filtered.total == 1
+
+
+def test_zed_linked_opencode_mode_passed() -> None:
+    thread = Thread(
+        id="thread-oc",
+        session_id="ses-oc",
+        agent_id="opencode",
+        title="Zed OpenCode 会话",
+        archived=False,
+        projects=[],
+    )
+    session = Session(
+        source_id="opencode",
+        external_id="ses-oc",
+        title="Zed OpenCode 会话",
+        agent="plan",
+    )
+    service = SearchService(threads=[thread], sessions=[session])
+
+    res = service.search(SearchRequest(scope=SessionScope.ZED))
+    assert res.total == 1
+    hit = res.hits[0]
+    assert hit.agent_id == "opencode"
+    assert hit.mode == "plan"
+    assert hit.management == "zed"
