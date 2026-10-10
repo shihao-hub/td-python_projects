@@ -159,6 +159,101 @@ def parse_codex_file(path: Path, *, limit: int = 2000) -> list[TimelineEvent]:
     return events
 
 
+def parse_pi_file(path: Path, *, limit: int = 2000) -> list[TimelineEvent]:
+    events: list[TimelineEvent] = []
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            t = obj.get("type")
+            ts = obj.get("timestamp", "")
+            ts = str(ts) if ts is not None else ""
+
+            if t == "session":
+                cwd = obj.get("cwd", "")
+                events.append(TimelineEvent(role="system", text=f"cwd: {cwd}", ts=ts))
+            elif t == "model_change":
+                provider = obj.get("provider", "")
+                model_id = obj.get("modelId", "")
+                events.append(TimelineEvent(role="system", text=f"model: {provider}/{model_id}", ts=ts))
+            elif t == "thinking_level_change":
+                level = obj.get("thinkingLevel", "")
+                events.append(TimelineEvent(role="system", text=f"thinking_level: {level}", ts=ts))
+            elif t == "message":
+                msg = obj.get("message")
+                if not isinstance(msg, dict):
+                    msg = obj
+                role = msg.get("role")
+                content = msg.get("content")
+
+                if role == "system":
+                    text = _text_of(content)
+                    if not text:
+                        sections = msg.get("sections")
+                        if isinstance(sections, dict):
+                            text = "\n".join(f"{k}: {v}" for k, v in sections.items() if v)
+                    if text:
+                        events.append(TimelineEvent(role="system", text=text[:8000], ts=ts))
+                elif role == "user":
+                    text = _text_of(content)
+                    if not text and isinstance(content, (dict, list)):
+                        text = json.dumps(content, ensure_ascii=False)
+                    if text:
+                        events.append(TimelineEvent(role="user", text=text[:8000], ts=ts))
+                elif role == "assistant":
+                    if isinstance(content, list):
+                        for part in content:
+                            if not isinstance(part, dict):
+                                continue
+                            pt = part.get("type")
+                            if pt == "thinking":
+                                thinking_text = str(part.get("thinking", ""))
+                                if thinking_text:
+                                    events.append(TimelineEvent(role="thinking", text=thinking_text[:8000], ts=ts))
+                            elif pt == "text":
+                                asst_text = str(part.get("text", ""))
+                                if asst_text:
+                                    events.append(TimelineEvent(role="assistant", text=asst_text[:8000], ts=ts))
+                            elif pt == "toolCall":
+                                name = str(part.get("name", "tool"))
+                                args = part.get("arguments", {})
+                                args_text = json.dumps(args, ensure_ascii=False) if isinstance(args, (dict, list)) else str(args)
+                                events.append(TimelineEvent(
+                                    role="tool_call",
+                                    name=name,
+                                    text=args_text[:4000],
+                                    ts=ts,
+                                ))
+                    elif isinstance(content, str) and content.strip():
+                        events.append(TimelineEvent(role="assistant", text=content[:8000], ts=ts))
+                elif role == "toolResult":
+                    tool_name = str(msg.get("toolName", obj.get("toolName", "tool")))
+                    text = _text_of(content)
+                    if not text and isinstance(content, (dict, list)):
+                        text = json.dumps(content, ensure_ascii=False)
+                    events.append(TimelineEvent(
+                        role="tool_result",
+                        name=tool_name,
+                        text=str(text)[:8000],
+                        ts=ts,
+                    ))
+                else:
+                    events.append(TimelineEvent(role="raw", text=json.dumps(obj, ensure_ascii=False)[:2000], ts=ts))
+            else:
+                events.append(TimelineEvent(role="raw", text=json.dumps(obj, ensure_ascii=False)[:2000], ts=ts))
+
+            if len(events) >= limit:
+                break
+    return events
+
+
 def _try_decode_blob(blob: bytes) -> str | None:
     for candidate in (blob,):
         try:
@@ -445,6 +540,12 @@ def load_trajectory(*, source: str, files: list[Path], limit: int = 2000,
             if f.suffix == ".db":
                 used = str(f)
                 events = parse_antigravity_db(f, limit=limit)
+                break
+    elif source in ("pi", "pi-acp"):
+        for f in files:
+            if f.suffix == ".jsonl":
+                used = str(f)
+                events = parse_pi_file(f, limit=limit)
                 break
     elif source == "opencode":
         from .opencode_repo import OpencodeDb
