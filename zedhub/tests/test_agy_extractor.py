@@ -135,3 +135,56 @@ def test_extract_agy_messages_integration(tmp_path: Path) -> None:
 
     # 未找到的 sid 返回空列表
     assert extract_agy_messages("unknown_sid", home=home) == []
+
+
+def test_scan_antigravity_cli_and_annotations(tmp_path: Path) -> None:
+    """验证 _scan_antigravity 能从 annotations 读取标题，从 transcript 提取 cwd，并过滤空会话。"""
+    from zedhub.core.agent_sessions import _scan_antigravity
+    from zedhub.core.sources import get_source
+    from zedhub.core.model import SessionListRequest
+
+    home = tmp_path
+    gemini = home / ".gemini"
+
+    # 1. 有效的 CLI 会话（含 annotations 和 transcript 中的 Cwd）
+    cli_sid = "cli_session_1"
+    cli_anno = gemini / "antigravity-cli" / "annotations" / f"{cli_sid}.pbtxt"
+    cli_anno.parent.mkdir(parents=True, exist_ok=True)
+    cli_anno.write_text('title:"Custom Terminal Tool" archived:true\n', encoding="utf-8")
+
+    cli_tr = gemini / "antigravity-cli" / "brain" / cli_sid / ".system_generated" / "logs" / "transcript.jsonl"
+    cli_tr.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        {"step_index": 0, "type": "USER_INPUT", "created_at": "2026-10-11T10:00:00Z", "content": "<USER_REQUEST>help me</USER_REQUEST>"},
+        {"step_index": 1, "type": "PLANNER_RESPONSE", "created_at": "2026-10-11T10:00:05Z", "tool_calls": [{"name": "run_command", "args": {"Cwd": str(tmp_path)}}]},
+    ]
+    cli_tr.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+
+    # 2. 僵尸空会话（只有 48KB db，无 transcript，无 annotations）
+    zombie_sid = "zombie_empty_0"
+    zombie_db = gemini / "antigravity-acp" / "conversations" / f"{zombie_sid}.db"
+    zombie_db.parent.mkdir(parents=True, exist_ok=True)
+    zombie_db.write_bytes(b"\x00" * 49152)  # 48KB 空 db
+
+    records = _scan_antigravity(home=home)
+    # zombie_empty_0 应被过滤，cli_session_1 应被保留
+    record_sids = {r.session_id: r for r in records}
+    assert zombie_sid not in record_sids
+    assert cli_sid in record_sids
+
+    rec = record_sids[cli_sid]
+    assert rec.title == "Custom Terminal Tool"
+    assert rec.directory == str(tmp_path)
+    assert rec.archived is True
+
+    # 3. FileSource._sessions 不应丢弃无 directory 的记录
+    agy_source = get_source("antigravity")
+    # 创建无 directory 的纯文本问答会话
+    chat_sid = "pure_chat_2"
+    chat_tr = gemini / "antigravity-cli" / "brain" / chat_sid / ".system_generated" / "logs" / "transcript.jsonl"
+    chat_tr.parent.mkdir(parents=True, exist_ok=True)
+    chat_tr.write_text(json.dumps({"step_index": 0, "type": "USER_INPUT", "created_at": "2026-10-11T12:00:00Z", "content": "Just a chat"}), encoding="utf-8")
+
+    # 此时 _scan_antigravity 能扫描出该会话
+    records2 = _scan_antigravity(home=home)
+    assert chat_sid in {r.session_id: r for r in records2}

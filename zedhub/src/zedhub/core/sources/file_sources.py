@@ -51,11 +51,11 @@ class FileSource(AgentSource):
                 title=record.title,
                 directory=record.directory or None,
                 agent=self.source_id,
+                archived=record.archived,
                 created_at=parse_ts(record.time_created),
                 updated_at=parse_ts(record.time_updated),
             )
             for record in records
-            if record.directory
         ]
         project = (request.project or "").casefold()
         if project:
@@ -135,11 +135,6 @@ class FileSource(AgentSource):
         # Antigravity 走独立的混合提取路径（transcript.jsonl 优先、SQLite+Proto 兜底）
         if self.source_id == "antigravity":
             messages = extract_agy_messages(external_id)
-            if not messages:
-                raise NotFoundError(
-                    f"未能从 Antigravity 会话中提取正文气泡: {external_id}"
-                    "（transcript.jsonl 不存在且 SQLite 解析无结果）"
-                )
             return SessionContent(session=session, messages=messages)
 
         found = locate_session_files(self.source_id, [external_id])

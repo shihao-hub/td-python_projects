@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +53,7 @@ class AgentSessionRecord:
     title: str
     time_created: str
     time_updated: str
+    archived: bool = False
 
 
 def iso_z_to_zed_ts(raw: str) -> str | None:
@@ -147,10 +149,12 @@ def _dedupe_records(records: list[AgentSessionRecord]) -> list[AgentSessionRecor
             merged[r.session_id] = AgentSessionRecord(
                 session_id=r.session_id, directory=r.directory, title=r.title,
                 time_created=r.time_created, time_updated=r.time_updated,
+                archived=r.archived,
             )
             continue
         prev.directory = prev.directory or r.directory
         prev.title = prev.title or r.title
+        prev.archived = prev.archived or r.archived
         prev.time_created = min(prev.time_created, r.time_created)
         prev.time_updated = max(prev.time_updated, r.time_updated)
     return [merged[sid] for sid in sorted(merged)]
@@ -282,7 +286,8 @@ def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
         v_root = root / variant
         conv = v_root / "conversations"
         brain = v_root / "brain"
-        # 收集该变体下的所有 sid（以 conversations/*.db 或 brain/* 为准）
+        anno_dir = v_root / "annotations"
+        # 收集该变体下的所有 sid（以 conversations/*.db、brain/* 或 annotations/*.pbtxt 为准）
         sids: set[str] = set()
         if conv.is_dir():
             for db in conv.glob("*.db"):
@@ -291,11 +296,26 @@ def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
             for b in brain.iterdir():
                 if b.is_dir():
                     sids.add(b.name)
+        if anno_dir.is_dir():
+            for a in anno_dir.glob("*.pbtxt"):
+                sids.add(a.stem)
 
         for sid in sorted(sids):
             meta = conv / f"{sid}.meta" if conv.is_dir() else None
             db = conv / f"{sid}.db" if conv.is_dir() else None
             tr = brain / sid / ".system_generated" / "logs" / "transcript.jsonl" if brain.is_dir() else None
+            anno = anno_dir / f"{sid}.pbtxt" if anno_dir.is_dir() else None
+
+            # 过滤既无 transcript 又无 annotations 且 db 较小（48KB 以下，无 steps 记录）的僵尸会话
+            if not (tr and tr.is_file()) and not (anno and anno.is_file()):
+                if db and db.is_file():
+                    try:
+                        if db.stat().st_size <= 49152:
+                            continue
+                    except OSError:
+                        continue
+                else:
+                    continue
 
             cwd: str | None = None
             if meta and meta.is_file():
@@ -307,6 +327,20 @@ def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
                 cwd = raw if isinstance(raw, str) and raw else None
 
             title = ""
+            archived = False
+            if anno and anno.is_file():
+                try:
+                    text = anno.read_text(encoding="utf-8", errors="replace")
+                    m = re.search(r'title:\s*"([^"]*)"', text)
+                    if not m:
+                        m = re.search(r'title:\s*([^\s\r\n]+)', text)
+                    if m and m.group(1):
+                        title = _clean_title(m.group(1)) or ""
+                    if "archived:true" in text.replace(" ", ""):
+                        archived = True
+                except OSError:
+                    pass
+
             first_ts: str | None = None
             last_ts: str | None = None
 
@@ -331,7 +365,28 @@ def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
                             req = _extract_user_request(raw_content)
                             if req:
                                 title = _clean_title(req) or ""
-                        if first_ts and title:
+                        if not cwd:
+                            for tc in obj.get("tool_calls") or []:
+                                args = tc.get("args") or {}
+                                if isinstance(args, dict) and args.get("Cwd"):
+                                    c = str(args["Cwd"]).strip('"')
+                                    if Path(c).is_dir():
+                                        cwd = c
+                                        break
+                            if not cwd:
+                                content = obj.get("content", "")
+                                for l in content.splitlines():
+                                    if "Command Working Directory:" in l:
+                                        c = l.split("Command Working Directory:")[1].strip()
+                                        if Path(c).is_dir():
+                                            cwd = c
+                                            break
+                                    elif l.startswith("- ") and (":\\" in l or ":/" in l):
+                                        c = l[2:].strip()
+                                        if Path(c).is_dir():
+                                            cwd = c
+                                            break
+                        if first_ts and title and cwd:
                             break
                 last_ts = _tail_timestamp(tr)
 
@@ -340,6 +395,8 @@ def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
 
             if created is None:
                 mtime_source = tr if (tr and tr.is_file()) else db
+                if not mtime_source or not mtime_source.is_file():
+                    mtime_source = anno
                 if mtime_source and mtime_source.is_file():
                     created = mtime_ns_to_zed_ts(mtime_source.stat().st_mtime_ns)
                     updated = updated or created
@@ -353,6 +410,7 @@ def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
                     title=title or "",
                     time_created=created or "",
                     time_updated=updated or created or "",
+                    archived=archived,
                 )
             )
     return _dedupe_records(records)
