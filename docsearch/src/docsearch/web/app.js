@@ -19,12 +19,12 @@ document.addEventListener("DOMContentLoaded", function () {
       })
       .then(function (data) {
         if (statusText) {
-          statusText.textContent = "已索引 " + data.total_files + " 个文件 (" + data.total_chunks + " 个片段) | 自动热监听运行中";
+          statusText.textContent = "宸茬储寮?" + data.total_files + " 涓枃浠?(" + data.total_chunks + " 涓墖娈? | 鑷姩鐑洃鍚繍琛屼腑";
         }
       })
       .catch(function (e) {
         if (statusText) {
-          statusText.textContent = "服务连接异常";
+          statusText.textContent = "鏈嶅姟杩炴帴寮傚父";
         }
       });
   }
@@ -47,7 +47,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!chunksEl) return;
     var expanded = chunksEl.classList.toggle("expanded");
     if (indicator) {
-      indicator.textContent = expanded ? "收起 ▲" : "展开 ▼";
+      indicator.textContent = expanded ? "鏀惰捣 鈻? : "灞曞紑 鈻?;
       indicator.style.color = expanded ? "#3b82f6" : "var(--text-muted)";
     }
   }
@@ -60,9 +60,9 @@ document.addEventListener("DOMContentLoaded", function () {
     resultsContainer.innerHTML = "";
     resultsHeader.style.display = "none";
     isAllExpanded = false;
-    if (toggleAllBtn) toggleAllBtn.textContent = "全部展开";
+    if (toggleAllBtn) toggleAllBtn.textContent = "鍏ㄩ儴灞曞紑";
 
-    fetch("/api/search?q=" + encodeURIComponent(query) + "&top_k=15")
+    fetch("/api/search?q=" + encodeURIComponent(query) + "&top_k=25")
       .then(function (res) {
         loadingSpinner.style.display = "none";
         if (!res.ok) {
@@ -75,9 +75,9 @@ document.addEventListener("DOMContentLoaded", function () {
 
         if (!data.results || data.results.length === 0) {
           resultsCount.textContent = "0";
-          queryEcho.textContent = '匹配关键词: "' + data.query + '"';
+          queryEcho.textContent = '鍖归厤鍏抽敭璇? "' + data.query + '"';
           if (toggleAllBtn) toggleAllBtn.style.display = "none";
-          resultsContainer.innerHTML = '<p style="color: var(--text-muted); padding: 1.5rem 0;">没有找到匹配片段。请确认相关文档是否在监听目录内，或尝试换一种描述。</p>';
+          resultsContainer.innerHTML = '<p style="color: var(--text-muted); padding: 1.5rem 0;">娌℃湁鎵惧埌鍖归厤鐗囨銆傝纭鐩稿叧鏂囨。鏄惁鍦ㄧ洃鍚洰褰曞唴锛屾垨灏濊瘯鎹竴绉嶆弿杩般€?/p>';
           return;
         }
 
@@ -109,15 +109,15 @@ document.addEventListener("DOMContentLoaded", function () {
           }
         });
 
-        resultsCount.textContent = fileGroups.length + " 个文件 (" + data.total + " 处片段)";
-        queryEcho.textContent = '匹配关键词: "' + data.query + '"';
+        resultsCount.textContent = fileGroups.length + " 涓枃浠?(" + data.total + " 澶勭墖娈?";
+        queryEcho.textContent = '鍖归厤鍏抽敭璇? "' + data.query + '"';
 
         fileGroups.forEach(function (group) {
           var card = document.createElement("div");
           card.className = "file-card";
 
           var maxScorePct = (group.maxScore * 100).toFixed(1) + "%";
-          var countText = group.chunks.length + " 处片段";
+          var countText = group.chunks.length + " 澶勭墖娈?;
 
           var cardHtml = '<div class="file-card-header">' +
             '<div class="file-meta-group">' +
@@ -125,24 +125,24 @@ document.addEventListener("DOMContentLoaded", function () {
                 '<span class="file-name">' + escapeHtml(group.filename) + '</span>' +
                 '<span class="file-count-tag">' + countText + '</span>' +
               '</div>' +
-              '<div class="file-path" title="点击复制完整路径" data-path="' + escapeHtml(group.filepath) + '">' +
-                '📄 <span>' + escapeHtml(group.filepath) + '</span>' +
+              '<div class="file-path" title="鐐瑰嚮澶嶅埗瀹屾暣璺緞" data-path="' + escapeHtml(group.filepath) + '">' +
+                '馃搫 <span>' + escapeHtml(group.filepath) + '</span>' +
               '</div>' +
             '</div>' +
             '<div class="file-badges">' +
-              '<span class="score-badge">相似度 ' + maxScorePct + '</span>' +
-              '<span class="expand-indicator">展开 ▼</span>' +
+              '<span class="score-badge">鐩镐技搴?' + maxScorePct + '</span>' +
+              '<span class="expand-indicator">灞曞紑 鈻?/span>' +
             '</div>' +
           '</div>';
 
           cardHtml += '<div class="chunks-container">';
           group.chunks.forEach(function (chunk, cIdx) {
-            var headingLabel = chunk.heading ? ("章节: " + escapeHtml(chunk.heading)) : ("片段 #" + (cIdx + 1));
+            var headingLabel = chunk.heading ? ("绔犺妭: " + escapeHtml(chunk.heading)) : ("鐗囨 #" + (cIdx + 1));
             var chunkScorePct = (chunk.score * 100).toFixed(1) + "%";
             cardHtml += '<div class="chunk-item">' +
               '<div class="chunk-meta">' +
                 '<span class="chunk-heading">' + headingLabel + '</span>' +
-                '<span class="chunk-lines">行 ' + chunk.start_line + '-' + chunk.end_line + ' · ' + chunkScorePct + '</span>' +
+                '<span class="chunk-lines">琛?' + chunk.start_line + '-' + chunk.end_line + ' 路 ' + chunkScorePct + '</span>' +
               '</div>' +
               '<div class="chunk-body">' + escapeHtml(chunk.content.trim()) + '</div>' +
             '</div>';
@@ -162,7 +162,7 @@ document.addEventListener("DOMContentLoaded", function () {
             navigator.clipboard.writeText(group.filepath);
             var span = pathEl.querySelector("span");
             var oldText = span.textContent;
-            span.textContent = "已复制文件完整路径到剪贴板！";
+            span.textContent = "宸插鍒舵枃浠跺畬鏁磋矾寰勫埌鍓创鏉匡紒";
             pathEl.style.color = "#34d399";
             setTimeout(function () {
               span.textContent = oldText;
@@ -175,14 +175,14 @@ document.addEventListener("DOMContentLoaded", function () {
       })
       .catch(function (err) {
         loadingSpinner.style.display = "none";
-        resultsContainer.innerHTML = '<p style="color: #ef4444;">网络请求错误: ' + escapeHtml(err.message) + '</p>';
+        resultsContainer.innerHTML = '<p style="color: #ef4444;">缃戠粶璇锋眰閿欒: ' + escapeHtml(err.message) + '</p>';
       });
   }
 
   if (toggleAllBtn) {
     toggleAllBtn.addEventListener("click", function () {
       isAllExpanded = !isAllExpanded;
-      toggleAllBtn.textContent = isAllExpanded ? "全部折叠" : "全部展开";
+      toggleAllBtn.textContent = isAllExpanded ? "鍏ㄩ儴鎶樺彔" : "鍏ㄩ儴灞曞紑";
       var cards = document.querySelectorAll(".file-card");
       cards.forEach(function (card) {
         var chunksEl = card.querySelector(".chunks-container");
@@ -191,13 +191,13 @@ document.addEventListener("DOMContentLoaded", function () {
           if (isAllExpanded) {
             chunksEl.classList.add("expanded");
             if (indicator) {
-              indicator.textContent = "收起 ▲";
+              indicator.textContent = "鏀惰捣 鈻?;
               indicator.style.color = "#3b82f6";
             }
           } else {
             chunksEl.classList.remove("expanded");
             if (indicator) {
-              indicator.textContent = "展开 ▼";
+              indicator.textContent = "灞曞紑 鈻?;
               indicator.style.color = "var(--text-muted)";
             }
           }
