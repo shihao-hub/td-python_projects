@@ -2,7 +2,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -31,12 +31,12 @@ console = Console(no_color=False, highlight=False)
 @app.command()
 def search(
     query: Optional[str] = typer.Argument(None, help="模糊自然语言检索词"),
-    top_k: int = typer.Option(5, "--top-k", "-k", help="返回最匹配的结果数量"),
+    top_k: int = typer.Option(10, "--top-k", "-k", help="返回最匹配的结果数量"),
     json_output: bool = typer.Option(False, "--json", help="以结构化 JSON 输出"),
     schema_output: bool = typer.Option(False, "--schema", help="输出接口数据规范 JSON Schema"),
     config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="自定义配置文件路径"),
 ):
-    """自然语言模糊语义检索文档"""
+    """自然语言模糊语义检索文档（按文件聚合展示）"""
     if schema_output:
         schema_dict = {
             "name": "docsearch_search",
@@ -45,7 +45,7 @@ def search(
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "检索自然语言句子"},
-                    "top_k": {"type": "integer", "default": 5, "description": "返回条目上限"},
+                    "top_k": {"type": "integer", "default": 10, "description": "返回条目上限"},
                 },
                 "required": ["query"],
             },
@@ -70,20 +70,42 @@ def search(
         console.print(f"[yellow]未找到与 '{query}' 相关的文档内容。请先运行 'docsearch index'。[/yellow]")
         return
 
-    console.print(f"\n[bold green][检索词][/bold green] '{query}' (找到 {res.total} 条相关片段)\n")
+    # 按文件聚合与去重
+    groups: Dict[str, Dict] = {}
+    for item in res.results:
+        if item.filepath not in groups:
+            groups[item.filepath] = {
+                "filename": item.filename,
+                "filepath": item.filepath,
+                "max_score": item.score,
+                "chunks": [],
+            }
+        g = groups[item.filepath]
+        if item.score > g["max_score"]:
+            g["max_score"] = item.score
+        if not any(c.content.strip() == item.content.strip() for c in g["chunks"]):
+            g["chunks"].append(item)
 
-    for i, item in enumerate(res.results, start=1):
-        score_pct = f"{item.score * 100:.1f}%"
-        title = f"[bold cyan]#{i} {item.filename}[/bold cyan] [magenta]({item.heading})[/magenta] - 相关度: [green]{score_pct}[/green]"
-        content_preview = item.content.strip()
-        if len(content_preview) > 350:
-            content_preview = content_preview[:350] + "..."
+    file_count = len(groups)
+    console.print(f"\n[bold green][检索词][/bold green] '{query}' (匹配 {file_count} 个文件)\n")
 
-        body = (
-            f"[dim]路径:[/dim] [underline]{item.filepath}[/underline] (行 {item.start_line}-{item.end_line})\n\n"
-            f"{content_preview}"
-        )
-        console.print(Panel(body, title=title, border_style="blue"))
+    for i, (fpath, g) in enumerate(groups.items(), start=1):
+        score_pct = f"{g['max_score'] * 100:.1f}%"
+        chunk_count = len(g["chunks"])
+        title = f"[bold cyan]#{i} {g['filename']}[/bold cyan] [yellow]({chunk_count} 处片段)[/yellow] - 最高匹配度: [green]{score_pct}[/green]"
+
+        body_lines = [f"[dim]路径:[/dim] [underline]{fpath}[/underline]\n"]
+        for c_idx, c in enumerate(g["chunks"], start=1):
+            c_score = f"{c.score * 100:.1f}%"
+            h_text = c.heading or "正文"
+            body_lines.append(f"[bold magenta]▶ 片段 {c_idx} · 章节: {h_text}[/bold magenta] [dim](行 {c.start_line}-{c.end_line} · {c_score})[/dim]")
+            snippet = c.content.strip()
+            if len(snippet) > 280:
+                snippet = snippet[:280] + "..."
+            body_lines.append(f"{snippet}\n")
+
+        body_text = "\n".join(body_lines).strip()
+        console.print(Panel(body_text, title=title, border_style="blue"))
 
 
 @app.command()
