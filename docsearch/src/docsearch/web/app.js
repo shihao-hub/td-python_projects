@@ -7,6 +7,9 @@ document.addEventListener("DOMContentLoaded", function () {
   var queryEcho = document.getElementById("queryEcho");
   var resultsContainer = document.getElementById("resultsContainer");
   var loadingSpinner = document.getElementById("loadingSpinner");
+  var toggleAllBtn = document.getElementById("toggleAllBtn");
+
+  var isAllExpanded = false;
 
   function fetchStatus() {
     fetch("/api/status")
@@ -38,6 +41,17 @@ document.addEventListener("DOMContentLoaded", function () {
       .replace(/'/g, "&#039;");
   }
 
+  function toggleCard(card) {
+    var chunksEl = card.querySelector(".chunks-container");
+    var indicator = card.querySelector(".expand-indicator");
+    if (!chunksEl) return;
+    var expanded = chunksEl.classList.toggle("expanded");
+    if (indicator) {
+      indicator.textContent = expanded ? "收起 ▲" : "展开 ▼";
+      indicator.style.color = expanded ? "#3b82f6" : "var(--text-muted)";
+    }
+  }
+
   function performSearch() {
     var query = (searchInput.value || "").trim();
     if (!query) return;
@@ -45,6 +59,8 @@ document.addEventListener("DOMContentLoaded", function () {
     loadingSpinner.style.display = "block";
     resultsContainer.innerHTML = "";
     resultsHeader.style.display = "none";
+    isAllExpanded = false;
+    if (toggleAllBtn) toggleAllBtn.textContent = "全部展开";
 
     fetch("/api/search?q=" + encodeURIComponent(query) + "&top_k=15")
       .then(function (res) {
@@ -60,9 +76,12 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!data.results || data.results.length === 0) {
           resultsCount.textContent = "0";
           queryEcho.textContent = '匹配关键词: "' + data.query + '"';
+          if (toggleAllBtn) toggleAllBtn.style.display = "none";
           resultsContainer.innerHTML = '<p style="color: var(--text-muted); padding: 1.5rem 0;">没有找到匹配片段。请确认相关文档是否在监听目录内，或尝试换一种描述。</p>';
           return;
         }
+
+        if (toggleAllBtn) toggleAllBtn.style.display = "inline-block";
 
         var fileMap = new Map();
         var fileGroups = [];
@@ -106,13 +125,14 @@ document.addEventListener("DOMContentLoaded", function () {
                 '<span class="file-name">' + escapeHtml(group.filename) + '</span>' +
                 '<span class="file-count-tag">' + countText + '</span>' +
               '</div>' +
+              '<div class="file-path" title="点击复制完整路径" data-path="' + escapeHtml(group.filepath) + '">' +
+                '📄 <span>' + escapeHtml(group.filepath) + '</span>' +
+              '</div>' +
             '</div>' +
             '<div class="file-badges">' +
               '<span class="score-badge">相似度 ' + maxScorePct + '</span>' +
+              '<span class="expand-indicator">展开 ▼</span>' +
             '</div>' +
-          '</div>' +
-          '<div class="file-path" title="点击复制完整路径" data-path="' + escapeHtml(group.filepath) + '">' +
-            '📄 <span>' + escapeHtml(group.filepath) + '</span>' +
           '</div>';
 
           cardHtml += '<div class="chunks-container">';
@@ -131,8 +151,14 @@ document.addEventListener("DOMContentLoaded", function () {
 
           card.innerHTML = cardHtml;
 
+          var headerEl = card.querySelector(".file-card-header");
+          headerEl.addEventListener("click", function () {
+            toggleCard(card);
+          });
+
           var pathEl = card.querySelector(".file-path");
-          pathEl.addEventListener("click", function () {
+          pathEl.addEventListener("click", function (e) {
+            e.stopPropagation();
             navigator.clipboard.writeText(group.filepath);
             var span = pathEl.querySelector("span");
             var oldText = span.textContent;
@@ -151,6 +177,33 @@ document.addEventListener("DOMContentLoaded", function () {
         loadingSpinner.style.display = "none";
         resultsContainer.innerHTML = '<p style="color: #ef4444;">网络请求错误: ' + escapeHtml(err.message) + '</p>';
       });
+  }
+
+  if (toggleAllBtn) {
+    toggleAllBtn.addEventListener("click", function () {
+      isAllExpanded = !isAllExpanded;
+      toggleAllBtn.textContent = isAllExpanded ? "全部折叠" : "全部展开";
+      var cards = document.querySelectorAll(".file-card");
+      cards.forEach(function (card) {
+        var chunksEl = card.querySelector(".chunks-container");
+        var indicator = card.querySelector(".expand-indicator");
+        if (chunksEl) {
+          if (isAllExpanded) {
+            chunksEl.classList.add("expanded");
+            if (indicator) {
+              indicator.textContent = "收起 ▲";
+              indicator.style.color = "#3b82f6";
+            }
+          } else {
+            chunksEl.classList.remove("expanded");
+            if (indicator) {
+              indicator.textContent = "展开 ▼";
+              indicator.style.color = "var(--text-muted)";
+            }
+          }
+        }
+      });
+    });
   }
 
   if (searchBtn) {
