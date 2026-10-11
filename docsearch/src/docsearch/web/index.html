@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>docsearch - 本地文档语义检索</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="brand">
+        <span class="logo">⚡</span>
+        <h1>docsearch</h1>
+        <span class="badge">Local AI</span>
+      </div>
+      <div class="status-bar" id="statusBar">
+        <span class="status-indicator"></span>
+        <span id="statusText">加载系统状态...</span>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section class="search-section">
+        <div class="search-input-wrapper">
+          <input 
+            type="text" 
+            id="searchInput" 
+            placeholder="输入自然语言模糊记忆，例如：'并发锁排障经验'、'多 Git 账号配置'..." 
+            autocomplete="off"
+            autofocus
+          />
+          <button id="searchBtn" class="primary-btn">检索</button>
+        </div>
+        <div class="search-hints">
+          <span>💡 支持自然语言描述，无须记住确切文件名或特定关键字</span>
+        </div>
+      </section>
+
+      <section class="results-section">
+        <div class="results-header" id="resultsHeader" style="display: none;">
+          <h2>检索结果 (<span id="resultsCount">0</span>)</h2>
+          <span id="queryEcho" class="query-echo"></span>
+        </div>
+
+        <div id="loadingSpinner" class="spinner-container" style="display: none;">
+          <div class="spinner"></div>
+          <p>正在语义推理并计算向量相似度...</p>
+        </div>
+
+        <div id="resultsContainer" class="results-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
