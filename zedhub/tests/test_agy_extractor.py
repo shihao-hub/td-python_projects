@@ -1,77 +1,22 @@
 """Antigravity 会话正文提取器单元测试。
 
 覆盖：
-- 方案 C：transcript.jsonl 解析与 USER_REQUEST 标签提取
-- 方案 A：Protobuf Wire Format Varint 解码器正确性
-- 方案 A：step_type=14/15 字段提取
-- 混合路径：方案 C 优先、方案 A 兜底回退
+- transcript.jsonl 原生解析与 USER_REQUEST 标签提取
+- 多变体路径探测（antigravity-acp, antigravity, antigravity-cli, antigravity-ide）
+- extract_agy_messages 主入口调用
 """
 
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 from zedhub.core.agy_extractor import (
-    _decode_varint,
+    _brain_transcript_path,
     _extract_user_request,
-    _parse_proto_fields,
-    extract_agy_from_sqlite,
     extract_agy_from_transcript,
     extract_agy_messages,
 )
-
-
-def test_decode_varint_basic() -> None:
-    """Varint 解码器：基本值。"""
-    # 单字节 Varint：值 = 1
-    val, offset = _decode_varint(b"\x01", 0)
-    assert val == 1
-    assert offset == 1
-
-    # 单字节 Varint：值 = 127
-    val, offset = _decode_varint(b"\x7f", 0)
-    assert val == 127
-    assert offset == 1
-
-    # 双字节 Varint：值 = 150 = 0x96 0x01
-    val, offset = _decode_varint(b"\x96\x01", 0)
-    assert val == 150
-    assert offset == 2
-
-    # 双字节 Varint：值 = 300 = 0xAC 0x02
-    val, offset = _decode_varint(b"\xac\x02", 0)
-    assert val == 300
-    assert offset == 2
-
-
-def test_decode_varint_with_offset() -> None:
-    """Varint 解码器：带偏移量。"""
-    data = b"\x00\x00\x96\x01\xff"
-    val, offset = _decode_varint(data, 2)
-    assert val == 150
-    assert offset == 4
-
-
-def test_parse_proto_fields_simple_varint() -> None:
-    """Proto 解析器：简单 Varint 字段。"""
-    # Field 1, wire type 0, value 15 → tag = (1 << 3) | 0 = 0x08, value = 0x0f
-    data = b"\x08\x0f"
-    fields = _parse_proto_fields(data)
-    assert 1 in fields
-    assert fields[1] == [15]
-
-
-def test_parse_proto_fields_string() -> None:
-    """Proto 解析器：Length-delimited 字符串字段。"""
-    text = "Hello"
-    text_bytes = text.encode("utf-8")
-    # Field 2, wire type 2 → tag = (2 << 3) | 2 = 0x12
-    data = b"\x12" + bytes([len(text_bytes)]) + text_bytes
-    fields = _parse_proto_fields(data)
-    assert 2 in fields
-    assert fields[2] == ["Hello"]
 
 
 def test_extract_user_request_tag() -> None:
@@ -92,7 +37,7 @@ def test_extract_user_request_no_tag() -> None:
 
 
 def test_extract_from_transcript(tmp_path: Path) -> None:
-    """方案 C：从 transcript.jsonl 提取纯文本气泡。"""
+    """从 transcript.jsonl 提取纯文本气泡。"""
     transcript = tmp_path / "transcript.jsonl"
     lines = [
         {
@@ -144,186 +89,49 @@ def test_extract_from_transcript(tmp_path: Path) -> None:
     assert msgs[2].parts[0].text == "函数已经写好了，请查看。"
 
 
-def _make_varint(value: int) -> bytes:
-    """编码整数为 Protobuf Varint。"""
-    result = bytearray()
-    while value > 127:
-        result.append((value & 0x7F) | 0x80)
-        value >>= 7
-    result.append(value & 0x7F)
-    return bytes(result)
+def test_brain_transcript_path_variants(tmp_path: Path) -> None:
+    """验证四大变体路径均可被 _brain_transcript_path 正确探测。"""
+    home = tmp_path
+    gemini = home / ".gemini"
+
+    # 1. 测试 antigravity-acp 优先
+    acp_log = gemini / "antigravity-acp" / "brain" / "sid_acp" / ".system_generated" / "logs" / "transcript.jsonl"
+    acp_log.parent.mkdir(parents=True, exist_ok=True)
+    acp_log.write_text("{}", encoding="utf-8")
+
+    found = _brain_transcript_path("sid_acp", home=home)
+    assert found == acp_log
+
+    # 2. 测试 antigravity 桌面版
+    desktop_log = gemini / "antigravity" / "brain" / "sid_desk" / ".system_generated" / "logs" / "transcript.jsonl"
+    desktop_log.parent.mkdir(parents=True, exist_ok=True)
+    desktop_log.write_text("{}", encoding="utf-8")
+
+    found = _brain_transcript_path("sid_desk", home=home)
+    assert found == desktop_log
+
+    # 3. 未找到时返回 None
+    assert _brain_transcript_path("non_existent", home=home) is None
 
 
-def _make_proto_field(field_num: int, wire_type: int, data: bytes) -> bytes:
-    """构建一个 Protobuf 字段。"""
-    tag = _make_varint((field_num << 3) | wire_type)
-    if wire_type == 0:  # Varint
-        return tag + data
-    elif wire_type == 2:  # Length-delimited
-        return tag + _make_varint(len(data)) + data
-    raise ValueError(f"不支持的 wire_type: {wire_type}")
-
-
-def test_extract_from_sqlite(tmp_path: Path) -> None:
-    """方案 A：从 SQLite + Proto 中启发式提取纯文本气泡。"""
-    db_path = tmp_path / "test_agy.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "CREATE TABLE steps ("
-        "  idx INTEGER PRIMARY KEY,"
-        "  step_type INTEGER NOT NULL DEFAULT 0,"
-        "  status INTEGER NOT NULL DEFAULT 0,"
-        "  has_subtrajectory NUMERIC NOT NULL DEFAULT 0,"
-        "  metadata BLOB,"
-        "  error_details BLOB,"
-        "  permissions BLOB,"
-        "  task_details BLOB,"
-        "  render_info BLOB,"
-        "  step_payload BLOB,"
-        "  step_format INTEGER NOT NULL DEFAULT 0"
-        ")"
-    )
-
-    # 构造 step_type=14（User Prompt）：Field #19 包含用户文本
-    user_text = "你好，请帮我分析这段代码"
-    user_text_bytes = user_text.encode("utf-8")
-    user_payload = (
-        _make_proto_field(1, 0, _make_varint(14))  # step_type = 14
-        + _make_proto_field(19, 2, user_text_bytes)  # Field #19 = 用户文本
-    )
-
-    # 构造 step_type=15（Assistant Message）：Field #20 > Sub #1 包含助手正文
-    assistant_text = "好的，我来分析这段代码。"
-    assistant_text_bytes = assistant_text.encode("utf-8")
-    # 子消息：Sub #1 = 正文 Markdown
-    sub_message = _make_proto_field(1, 2, assistant_text_bytes)
-    assistant_payload = (
-        _make_proto_field(1, 0, _make_varint(15))  # step_type = 15
-        + _make_proto_field(20, 2, sub_message)  # Field #20 = 嵌套子消息
-    )
-
-    # 构造 step_type=17（Tool Call）：应被过滤
-    tool_payload = (
-        _make_proto_field(1, 0, _make_varint(17))
-        + _make_proto_field(116, 2, b'{"tool": "run_command"}')
-    )
-
-    conn.execute(
-        "INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)",
-        (0, 14, user_payload),
-    )
-    conn.execute(
-        "INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)",
-        (1, 15, assistant_payload),
-    )
-    conn.execute(
-        "INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)",
-        (2, 17, tool_payload),
-    )
-    conn.commit()
-    conn.close()
-
-    msgs = extract_agy_from_sqlite(db_path)
-    assert len(msgs) == 2
-    assert msgs[0].role == "user"
-    assert msgs[0].parts[0].text == user_text
-    assert msgs[1].role == "assistant"
-    assert msgs[1].parts[0].text == assistant_text
-
-
-def test_hybrid_prefers_transcript(tmp_path: Path) -> None:
-    """混合策略：transcript.jsonl 存在时优先使用方案 C。"""
-    conv_id = "test-hybrid-00000000"
-
-    # 创建方案 C 的 transcript.jsonl
-    brain_dir = tmp_path / ".gemini" / "antigravity" / "brain" / conv_id / ".system_generated" / "logs"
-    brain_dir.mkdir(parents=True)
-    transcript = brain_dir / "transcript.jsonl"
+def test_extract_agy_messages_integration(tmp_path: Path) -> None:
+    """测试 extract_agy_messages 综合读取。"""
+    home = tmp_path
+    sid = "conv_123"
+    tr_path = home / ".gemini" / "antigravity-acp" / "brain" / sid / ".system_generated" / "logs" / "transcript.jsonl"
+    tr_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        {
-            "type": "USER_INPUT",
-            "created_at": "2026-10-01T10:00:00Z",
-            "content": "<USER_REQUEST>\n来自 transcript\n</USER_REQUEST>",
-        },
-        {
-            "type": "PLANNER_RESPONSE",
-            "created_at": "2026-10-01T10:00:05Z",
-            "content": "这是来自 transcript 的回复。",
-        },
+        {"step_index": 0, "type": "USER_INPUT", "content": "<USER_REQUEST>测试问题</USER_REQUEST>"},
+        {"step_index": 1, "type": "PLANNER_RESPONSE", "content": "测试回答"},
     ]
-    with transcript.open("w", encoding="utf-8") as f:
-        for line in lines:
-            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    tr_path.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
 
-    # 同时创建方案 A 的 SQLite DB（应被忽略）
-    conv_dir = tmp_path / ".gemini" / "antigravity-acp" / "conversations"
-    conv_dir.mkdir(parents=True)
-    db_path = conv_dir / f"{conv_id}.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "CREATE TABLE steps ("
-        "  idx INTEGER PRIMARY KEY,"
-        "  step_type INTEGER NOT NULL DEFAULT 0,"
-        "  status INTEGER NOT NULL DEFAULT 0,"
-        "  has_subtrajectory NUMERIC NOT NULL DEFAULT 0,"
-        "  metadata BLOB, error_details BLOB, permissions BLOB,"
-        "  task_details BLOB, render_info BLOB, step_payload BLOB,"
-        "  step_format INTEGER NOT NULL DEFAULT 0"
-        ")"
-    )
-    user_payload = (
-        _make_proto_field(1, 0, _make_varint(14))
-        + _make_proto_field(19, 2, "来自 SQLite 的消息".encode("utf-8"))
-    )
-    conn.execute("INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)", (user_payload,))
-    conn.commit()
-    conn.close()
-
-    # 混合提取：应使用方案 C 的结果
-    msgs = extract_agy_messages(conv_id, home=tmp_path)
-    assert len(msgs) == 2
-    assert msgs[0].parts[0].text == "来自 transcript"
-    assert msgs[1].parts[0].text == "这是来自 transcript 的回复。"
-
-
-def test_hybrid_falls_back_to_sqlite(tmp_path: Path) -> None:
-    """混合策略：无 transcript.jsonl 时回退到方案 A。"""
-    conv_id = "test-fallback-00000000"
-
-    # 只创建方案 A 的 SQLite DB
-    conv_dir = tmp_path / ".gemini" / "antigravity-acp" / "conversations"
-    conv_dir.mkdir(parents=True)
-    db_path = conv_dir / f"{conv_id}.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "CREATE TABLE steps ("
-        "  idx INTEGER PRIMARY KEY,"
-        "  step_type INTEGER NOT NULL DEFAULT 0,"
-        "  status INTEGER NOT NULL DEFAULT 0,"
-        "  has_subtrajectory NUMERIC NOT NULL DEFAULT 0,"
-        "  metadata BLOB, error_details BLOB, permissions BLOB,"
-        "  task_details BLOB, render_info BLOB, step_payload BLOB,"
-        "  step_format INTEGER NOT NULL DEFAULT 0"
-        ")"
-    )
-    user_payload = (
-        _make_proto_field(1, 0, _make_varint(14))
-        + _make_proto_field(19, 2, "SQLite 兜底提取".encode("utf-8"))
-    )
-    assistant_text = "这是从 Proto 解析出来的回复"
-    sub_msg = _make_proto_field(1, 2, assistant_text.encode("utf-8"))
-    asst_payload = (
-        _make_proto_field(1, 0, _make_varint(15))
-        + _make_proto_field(20, 2, sub_msg)
-    )
-    conn.execute("INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)", (user_payload,))
-    conn.execute("INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 15, ?)", (asst_payload,))
-    conn.commit()
-    conn.close()
-
-    msgs = extract_agy_messages(conv_id, home=tmp_path)
+    msgs = extract_agy_messages(sid, home=home)
     assert len(msgs) == 2
     assert msgs[0].role == "user"
-    assert msgs[0].parts[0].text == "SQLite 兜底提取"
+    assert msgs[0].parts[0].text == "测试问题"
     assert msgs[1].role == "assistant"
-    assert msgs[1].parts[0].text == assistant_text
+    assert msgs[1].parts[0].text == "测试回答"
+
+    # 未找到的 sid 返回空列表
+    assert extract_agy_messages("unknown_sid", home=home) == []

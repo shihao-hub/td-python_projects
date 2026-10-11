@@ -196,3 +196,53 @@ def test_parse_pi_nested_message_structure(tmp_path: Path) -> None:
     assert events[4].text == "exit 0"
 
 
+
+
+def test_parse_antigravity_transcript_and_load_trajectory(tmp_path: Path) -> None:
+    """Antigravity transcript.jsonl 原生轨迹解析测试。"""
+    f = tmp_path / "transcript.jsonl"
+    rows = [
+        {
+            "step_index": 0,
+            "type": "USER_INPUT",
+            "created_at": "2026-10-11T09:00:00Z",
+            "content": "<USER_REQUEST>\n帮我写一个测试用例\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nfoo\n</ADDITIONAL_METADATA>",
+        },
+        {
+            "step_index": 1,
+            "type": "PLANNER_RESPONSE",
+            "created_at": "2026-10-11T09:00:05Z",
+            "thinking": "我需要先查看现有测试代码",
+            "tool_calls": [{"name": "run_command", "args": {"command": "pytest"}}],
+            "content": "正在为您编写测试用例。",
+        },
+        {
+            "step_index": 2,
+            "type": "RUN_COMMAND",
+            "status": "DONE",
+            "created_at": "2026-10-11T09:00:10Z",
+            "content": "5 passed in 0.1s",
+        },
+    ]
+    f.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+
+    from zedhub.core.trajectory import parse_antigravity_transcript
+
+    events = parse_antigravity_transcript(f)
+    assert len(events) == 5
+    assert [e.role for e in events] == [
+        "user", "thinking", "tool_call", "assistant", "tool_result"
+    ]
+    assert events[0].text == "帮我写一个测试用例"
+    assert events[1].text == "我需要先查看现有测试代码"
+    assert events[2].name == "run_command"
+    assert json.loads(events[2].text) == {"command": "pytest"}
+    assert events[3].text == "正在为您编写测试用例。"
+    assert events[4].role == "tool_result"
+    assert events[4].text == "5 passed in 0.1s"
+
+    # 验证 load_trajectory 分派
+    out = load_trajectory(source="antigravity", files=[f])
+    assert out["source"] == "antigravity"
+    assert out["file"] == str(f)
+    assert out["count"] == 5

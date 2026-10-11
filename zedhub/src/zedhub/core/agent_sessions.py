@@ -29,7 +29,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .agent_paths import FILE_SOURCES, agent_data_root
+from .agent_paths import ANTIGRAVITY_VARIANTS, FILE_SOURCES, agent_data_root
+from .agy_extractor import _extract_user_request
 from .errors import SourceNotSupportedError
 
 # 头部扫描行数上限：cwd/标题/首时间戳都在会话开头附近
@@ -272,34 +273,89 @@ def _scan_codex(home: Path | None) -> list[AgentSessionRecord]:
 
 
 def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
-    base = agent_data_root("antigravity", home=home) / "antigravity-acp" / "conversations"
+    root = agent_data_root("antigravity", home=home)
     records: list[AgentSessionRecord] = []
-    if not base.is_dir():
+    if not root.is_dir():
         return records
-    # 以 .db（会话本体）为锚：缺 .meta 或缺 cwd 的记录 directory 留空，
-    # 由调用方跳过并计数（no_directory），不猜测目录
-    for db in sorted(base.glob("*.db")):
-        sid = db.stem
-        meta = base / f"{sid}.meta"
-        cwd = None
-        if meta.is_file():
-            try:
-                data = json.loads(meta.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                data = {}
-            raw = data.get("cwd") if isinstance(data, dict) else None
-            cwd = raw if isinstance(raw, str) and raw else None
-        ts = mtime_ns_to_zed_ts(db.stat().st_mtime_ns)
-        records.append(
-            AgentSessionRecord(
-                session_id=sid,
-                directory=os.path.normpath(cwd) if cwd else "",
-                title="",  # 对话本体是 protobuf（无公开 schema），标题留空
-                time_created=ts,
-                time_updated=ts,
+
+    for variant in ANTIGRAVITY_VARIANTS:
+        v_root = root / variant
+        conv = v_root / "conversations"
+        brain = v_root / "brain"
+        # 收集该变体下的所有 sid（以 conversations/*.db 或 brain/* 为准）
+        sids: set[str] = set()
+        if conv.is_dir():
+            for db in conv.glob("*.db"):
+                sids.add(db.stem)
+        if brain.is_dir():
+            for b in brain.iterdir():
+                if b.is_dir():
+                    sids.add(b.name)
+
+        for sid in sorted(sids):
+            meta = conv / f"{sid}.meta" if conv.is_dir() else None
+            db = conv / f"{sid}.db" if conv.is_dir() else None
+            tr = brain / sid / ".system_generated" / "logs" / "transcript.jsonl" if brain.is_dir() else None
+
+            cwd: str | None = None
+            if meta and meta.is_file():
+                try:
+                    data = json.loads(meta.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    data = {}
+                raw = data.get("cwd") if isinstance(data, dict) else None
+                cwd = raw if isinstance(raw, str) and raw else None
+
+            title = ""
+            first_ts: str | None = None
+            last_ts: str | None = None
+
+            if tr and tr.is_file():
+                with tr.open(encoding="utf-8", errors="replace") as fh:
+                    for i, line in enumerate(fh):
+                        if i >= _HEAD_LINES:
+                            break
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(obj, dict):
+                            continue
+                        if first_ts is None and isinstance(obj.get("created_at"), str):
+                            first_ts = obj["created_at"]
+                        if not title and obj.get("type") == "USER_INPUT":
+                            raw_content = obj.get("content", "")
+                            req = _extract_user_request(raw_content)
+                            if req:
+                                title = _clean_title(req) or ""
+                        if first_ts and title:
+                            break
+                last_ts = _tail_timestamp(tr)
+
+            created = iso_z_to_zed_ts(first_ts or "")
+            updated = iso_z_to_zed_ts(last_ts or "") or created
+
+            if created is None:
+                mtime_source = tr if (tr and tr.is_file()) else db
+                if mtime_source and mtime_source.is_file():
+                    created = mtime_ns_to_zed_ts(mtime_source.stat().st_mtime_ns)
+                    updated = updated or created
+                else:
+                    continue
+
+            records.append(
+                AgentSessionRecord(
+                    session_id=sid,
+                    directory=os.path.normpath(cwd) if cwd else "",
+                    title=title or "",
+                    time_created=created or "",
+                    time_updated=updated or created or "",
+                )
             )
-        )
-    return records
+    return _dedupe_records(records)
 
 
 def _scan_pi(home: Path | None) -> list[AgentSessionRecord]:

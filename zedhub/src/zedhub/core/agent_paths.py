@@ -37,6 +37,14 @@ _DATA_ROOT_NAMES: dict[str, str] = {
     "pi": ".pi",
 }
 
+# Antigravity 各变体实例目录名（在 .gemini 下）
+ANTIGRAVITY_VARIANTS: tuple[str, ...] = (
+    "antigravity-acp",
+    "antigravity",
+    "antigravity-cli",
+    "antigravity-ide",
+)
+
 
 def agent_id_for(source: str) -> str:
     """source id → Zed agent_id；未知 source 抛 SourceNotSupportedError。"""
@@ -91,14 +99,21 @@ def locate_session_files(
                 for sid in wanted:
                     if f.name.endswith(f"-{sid}.jsonl"):
                         found.setdefault(sid, []).append(f)
-    elif source == "antigravity":
-        base = root / "antigravity-acp" / "conversations"
-        if base.is_dir():
+    elif source in ("antigravity", "antigravity-desktop"):
+        for variant in ANTIGRAVITY_VARIANTS:
+            v_root = root / variant
             for sid in wanted:
-                for name in (f"{sid}.db", f"{sid}.meta"):
-                    f = base / name
-                    if f.is_file():
-                        found.setdefault(sid, []).append(f)
+                # 1. 优先定位明文 transcript.jsonl
+                tr = v_root / "brain" / sid / ".system_generated" / "logs" / "transcript.jsonl"
+                if tr.is_file() and tr not in found.get(sid, []):
+                    found.setdefault(sid, []).append(tr)
+                # 2. 补充元数据与数据库文件
+                conv = v_root / "conversations"
+                if conv.is_dir():
+                    for name in (f"{sid}.db", f"{sid}.meta"):
+                        f = conv / name
+                        if f.is_file() and f not in found.get(sid, []):
+                            found.setdefault(sid, []).append(f)
     elif source in ("pi", "pi-acp"):
         base = root / "agent" / "sessions"
         if base.is_dir():
