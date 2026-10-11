@@ -1,0 +1,17 @@
+{
+  "name": "docsearch 本地语义检索",
+  "short_name": "docsearch",
+  "description": "本地离线 Markdown 与工程技能知识库向量检索应用",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#161b22",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

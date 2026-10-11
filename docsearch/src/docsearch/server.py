@@ -51,7 +51,7 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
         stats = service.index_all(force=force)
         return {"status": "ok", "stats": stats}
 
-    # 挂载 WebUI 静态文件
+    # 挂载 WebUI 静态文件与 PWA 根路由
     web_dir = Path(__file__).parent / "web"
     if web_dir.exists():
         app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
@@ -59,6 +59,14 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
         @app.get("/")
         def serve_index():
             return FileResponse(str(web_dir / "index.html"))
+
+        @app.get("/manifest.json")
+        def serve_manifest():
+            return FileResponse(str(web_dir / "manifest.json"))
+
+        @app.get("/favicon.ico")
+        def serve_favicon():
+            return FileResponse(str(web_dir / "icon.svg"), media_type="image/svg+xml")
 
     return app
 

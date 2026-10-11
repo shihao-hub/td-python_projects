@@ -1,5 +1,9 @@
 import json
+import os
+import shutil
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -26,6 +30,56 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console(no_color=False, highlight=False)
+
+
+def launch_app_window(url: str) -> bool:
+    """自动探测 Chrome / Edge 并以独立应用窗口 (--app) 启动（遵循 sh-localhost-pwa 规范）。"""
+    # 1. 优先检查 PATH 中的环境变量
+    candidates = ["chrome", "google-chrome", "google-chrome-stable", "chromium", "msedge", "microsoft-edge"]
+    for c in candidates:
+        found = shutil.which(c)
+        if found:
+            try:
+                subprocess.Popen([found, f"--app={url}"])
+                return True
+            except OSError:
+                continue
+
+    # 2. Windows 常见物理安装路径探测
+    if sys.platform == "win32":
+        win_paths = [
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+        ]
+        for p in win_paths:
+            if os.path.isfile(p):
+                try:
+                    subprocess.Popen([p, f"--app={url}"])
+                    return True
+                except OSError:
+                    continue
+
+    # 3. macOS 路径探测
+    if sys.platform == "darwin":
+        mac_paths = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ]
+        for p in mac_paths:
+            if os.path.isfile(p):
+                try:
+                    subprocess.Popen([p, f"--app={url}"])
+                    return True
+                except OSError:
+                    continue
+
+    # 4. 回退：默认浏览器打开
+    import webbrowser
+    webbrowser.open(url)
+    return False
 
 
 @app.command()
@@ -60,93 +114,61 @@ def search(
 
     cfg = load_config(config_file)
     service = SearchService(cfg)
-    res = service.search(query, top_k=top_k)
+    resp = service.search(query=query, top_k=top_k)
 
     if json_output:
-        print(json.dumps(res.model_dump(), indent=2, ensure_ascii=False))
+        print(resp.model_dump_json(indent=2))
         return
 
-    if res.total == 0:
-        console.print(f"[yellow]未找到与 '{query}' 相关的文档内容。请先运行 'docsearch index'。[/yellow]")
+    console.print(f"\n[bold green]🔍 检索:[/bold green] [bold cyan]{resp.query}[/bold cyan]  (耗时: {resp.took_ms:.1f}ms, 匹配文件: {len(resp.results)})")
+
+    if not resp.results:
+        console.print("[yellow]未找到相关文档，请尝试换一个描述。[/yellow]\n")
         return
 
-    # 按文件聚合与去重
-    groups: Dict[str, Dict] = {}
-    for item in res.results:
-        if item.filepath not in groups:
-            groups[item.filepath] = {
-                "filename": item.filename,
-                "filepath": item.filepath,
-                "max_score": item.score,
-                "chunks": [],
-            }
-        g = groups[item.filepath]
-        if item.score > g["max_score"]:
-            g["max_score"] = item.score
-        if not any(c.content.strip() == item.content.strip() for c in g["chunks"]):
-            g["chunks"].append(item)
+    for item in resp.results:
+        title_text = f"📄 {item.title}  ({item.filepath})"
+        score_badge = f"[bold green]{item.score * 100:.1f}% 匹配[/bold green]"
 
-    file_count = len(groups)
-    console.print(f"\n[bold green][检索词][/bold green] '{query}' (匹配 {file_count} 个文件)\n")
+        content_lines = []
+        for c in item.chunks[:2]:
+            header_str = f"[dim]#{c.chunk_index} (相似度: {c.score:.3f})[/dim]"
+            preview_clean = c.content[:160].replace("\n", " ").strip()
+            content_lines.append(f"{header_str}\n{preview_clean}...")
 
-    for i, (fpath, g) in enumerate(groups.items(), start=1):
-        score_pct = f"{g['max_score'] * 100:.1f}%"
-        chunk_count = len(g["chunks"])
-        title = f"[bold cyan]#{i} {g['filename']}[/bold cyan] [yellow]({chunk_count} 处片段)[/yellow] - 最高匹配度: [green]{score_pct}[/green]"
+        if len(item.chunks) > 2:
+            content_lines.append(f"[dim]... 其余 {len(item.chunks) - 2} 处匹配切块已折叠[/dim]")
 
-        body_lines = [f"[dim]路径:[/dim] [underline]{fpath}[/underline]\n"]
-        for c_idx, c in enumerate(g["chunks"], start=1):
-            c_score = f"{c.score * 100:.1f}%"
-            h_text = c.heading or "正文"
-            body_lines.append(f"[bold magenta]▶ 片段 {c_idx} · 章节: {h_text}[/bold magenta] [dim](行 {c.start_line}-{c.end_line} · {c_score})[/dim]")
-            snippet = c.content.strip()
-            if len(snippet) > 280:
-                snippet = snippet[:280] + "..."
-            body_lines.append(f"{snippet}\n")
-
-        body_text = "\n".join(body_lines).strip()
-        console.print(Panel(body_text, title=title, border_style="blue"))
+        body = "\n\n".join(content_lines)
+        console.print(Panel(body, title=f"{title_text} - {score_badge}", border_style="blue", padding=(0, 1)))
+    print()
 
 
 @app.command()
 def index(
-    force: bool = typer.Option(False, "--force", "-f", help="强制重新索引所有文件（忽略 mtime 缓存）"),
-    json_output: bool = typer.Option(False, "--json", help="以结构化 JSON 输出"),
+    force: bool = typer.Option(False, "--force", "-f", help="强制清空并全量重新构建索引"),
     config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="自定义配置文件路径"),
 ):
-    """扫描配置的目标目录并建立/更新向量索引"""
+    """扫描所有配置目录并构建本地语义向量索引"""
     cfg = load_config(config_file)
     service = SearchService(cfg)
-
-    if not json_output:
-        console.print("[bold cyan][*] 正在扫描配置目录并建立语义索引...[/bold cyan]")
-        for d in cfg.indexing.watch_dirs:
-            console.print(f"  - {d}")
-
-    stats = service.index_all(force=force)
-
-    if json_output:
-        print(json.dumps(stats, indent=2, ensure_ascii=False))
-        return
-
-    console.print(
-        f"\n[bold green][OK] 索引构建完成！[/bold green] 新增/更新文件: {stats['indexed_files']} 个，切块: {stats['indexed_chunks']} 个。"
-    )
+    console.print("[bold blue][*] 开始索引文档...[/bold blue]")
+    t0 = time.time()
+    st = service.index_all(force=force)
+    took = time.time() - t0
+    console.print(f"[bold green]✔ 索引构建完成！[/bold green] (耗时: {took:.2f}s)")
+    console.print(f"  - 索引文件数: {st.total_files}")
+    console.print(f"  - 向量切块数: {st.total_chunks}")
 
 
 @app.command()
 def status(
-    json_output: bool = typer.Option(False, "--json", help="以结构化 JSON 输出"),
     config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="自定义配置文件路径"),
 ):
-    """查看当前索引统计与配置信息"""
+    """查看当前索引库状态与监听目录"""
     cfg = load_config(config_file)
     service = SearchService(cfg)
     st = service.get_stats()
-
-    if json_output:
-        print(json.dumps(st.model_dump(), indent=2, ensure_ascii=False))
-        return
 
     table = Table(title="docsearch 系统状态")
     table.add_column("配置项", style="cyan")
@@ -185,14 +207,63 @@ def watch(
 def serve(
     host: Optional[str] = typer.Option(None, "--host", help="监听地址"),
     port: Optional[int] = typer.Option(None, "--port", "-p", help="监听端口"),
+    app_window: bool = typer.Option(False, "--app", help="以独立应用窗口 (--app) 启动 Chrome/Edge"),
     config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="自定义配置文件路径"),
 ):
-    """启动 HTTP API 与内置 WebUI 服务"""
+    """启动 HTTP API 与内置 WebUI 服务（支持 --app 独立窗口模式）"""
     from docsearch.server import run_server
     cfg = load_config(config_file)
     h = host or cfg.server.host
     p = port or cfg.server.port
+    url = f"http://{h}:{p}"
+
+    if app_window:
+        def _open_app():
+            time.sleep(1.2)
+            console.print(f"[bold cyan][*] 正在呼出 Chrome/Edge 独立应用窗口: {url}[/bold cyan]")
+            launch_app_window(url)
+        threading.Thread(target=_open_app, daemon=True).start()
+
     run_server(cfg, host=h, port=p)
+
+
+@app.command()
+def ui(
+    host: Optional[str] = typer.Option(None, "--host", help="监听地址"),
+    port: Optional[int] = typer.Option(None, "--port", "-p", help="监听端口"),
+    browser: bool = typer.Option(False, "--browser", help="以常规浏览器标签页打开而非独立应用窗口"),
+    config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="自定义配置文件路径"),
+):
+    """一键以桌面应用形态启动并打开 docsearch UI 界面"""
+    serve(host=host, port=port, app_window=not browser, config_file=config_file)
+
+
+@app.command()
+def shortcut(
+    desktop: bool = typer.Option(True, "--desktop/--no-desktop", help="在 Windows 桌面创建一键直达应用快捷入口"),
+):
+    """在桌面生成无黑框直达 Chrome 独立应用的启动脚本"""
+    if sys.platform != "win32":
+        console.print("[yellow]当前平台非 Windows，跳过创建快捷脚本。[/yellow]")
+        return
+
+    desktop_path = Path(os.path.expanduser("~/Desktop"))
+    if not desktop_path.exists():
+        console.print("[red]未找到桌面目录。[/red]")
+        return
+
+    vbs_path = desktop_path / "docsearch.vbs"
+    project_dir = Path(__file__).resolve().parent.parent.parent
+    uv_path = shutil.which("uv") or "uv"
+
+    # 生成静默拉起脚本（零黑框）
+    vbs_content = f'''Set WshShell = CreateObject("WScript.Shell")
+WshShell.CurrentDirectory = "{project_dir}"
+WshShell.Run "cmd /c {uv_path} run docsearch ui", 0, False
+'''
+    vbs_path.write_text(vbs_content, encoding="utf-8")
+    console.print(f"[bold green]✔ 已在桌面生成直达应用脚本:[/bold green] {vbs_path}")
+    console.print("[dim]提示：双击该图标即可后台静默拉起 docsearch 并打开 Chrome/Edge 独立应用窗口。[/dim]")
 
 
 if __name__ == "__main__":
