@@ -13,9 +13,11 @@
 <header class="bar">
   <div class="brand">
     <span class="mark">zedhub</span>
-    <span class="sub">会话检索 · 元数据（正文检索见二期）</span>
+    <span class="sub">会话检索 · 元数据与正文全文检索</span>
   </div>
   <div class="bar-right">
+    <button id="btn-reindex" type="button" class="btn-subtle" title="增量更新会话正文 FTS5 索引">更新正文索引</button>
+    <span id="index-status" class="index-status-pill"></span>
     <span id="status" class="status" role="status" aria-live="polite"></span>
   </div>
 </header>
@@ -24,7 +26,10 @@
   <section class="left" aria-label="筛选与会话">
     <form id="filters" class="filters side" autocomplete="off">
       <div class="field grow">
-        <label for="q">关键词</label>
+        <div class="field-header">
+          <label for="q">关键词</label>
+          <label class="cb-label" title="在多源 Agent 会话消息正文中执行全文检索"><input id="content" name="content" type="checkbox"> 搜正文</label>
+        </div>
         <input id="q" name="q" type="search" placeholder="多个关键词用空格分隔（全部命中）；/ 聚焦，Esc 清空" spellcheck="false">
       </div>
       <div class="frow">

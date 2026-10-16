@@ -112,7 +112,12 @@ class SessionScope(str, Enum):
     EXTERNAL = "external"
 
 
-# -- 会话元数据检索（一期：只搜元数据，不做正文全文索引） ---------------------
+class ContentSnippet(BaseModel):
+    """正文检索命中的上下文摘录。"""
+
+    role: str                       # "user" | "assistant"
+    text: str                       # 包含关键词的上下文片段
+    created_at: datetime | None = None
 
 
 class SearchRequest(BaseModel):
@@ -127,6 +132,7 @@ class SearchRequest(BaseModel):
     limit: int | None = None      # 0 = 不限制；None = 调用方默认
     scope: SessionScope = SessionScope.ALL  # all / zed / external
     include_unlinked: bool = False  # 兼容旧客户端：补上所有外部会话
+    content: bool = False         # 是否全文检索消息正文（二期能力）
 
 
 class SearchHit(BaseModel):
@@ -146,8 +152,9 @@ class SearchHit(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     interacted_at: datetime | None = None
-    matched_fields: list[str] = []  # title/agent/id/project（GUI 高亮用）
+    matched_fields: list[str] = []  # title/agent/id/project/content（GUI 高亮用）
     zed_linked: bool = False        # 是否存在于 Zed 索引
+    snippets: list[ContentSnippet] = []  # 正文检索命中时的上下文摘录
 
 
 class SearchResult(BaseModel):
@@ -158,6 +165,25 @@ class SearchResult(BaseModel):
     count: int                    # 本次返回条数
     degraded: list[str] = []      # 数据源降级说明（空 = 全部可用）
     hits: list[SearchHit] = []
+
+
+class IndexStatus(BaseModel):
+    """正文 FTS5 索引状态。"""
+
+    indexed_sessions: int = 0
+    indexed_messages: int = 0
+    db_size_bytes: int = 0
+    last_built_at: datetime | None = None
+
+
+class IndexBuildStats(BaseModel):
+    """正文索引构建结果统计。"""
+
+    scanned_sessions: int = 0
+    updated_sessions: int = 0
+    skipped_sessions: int = 0
+    indexed_messages: int = 0
+    duration_ms: int = 0
 
 
 def ms_to_dt(ms: int | None) -> datetime | None:

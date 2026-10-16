@@ -8,6 +8,7 @@ const MAX_TEXT_PER_MSG = 4000;  // 单条消息渲染上限，避免长正文压
 const el = {
   form: document.getElementById("filters"),
   q: document.getElementById("q"),
+  content: document.getElementById("content"),
   agent: document.getElementById("agent"),
   project: document.getElementById("project"),
   archived: document.getElementById("archived"),
@@ -17,6 +18,8 @@ const el = {
   detail: document.getElementById("detail"),
   status: document.getElementById("status"),
   notice: document.getElementById("notice"),
+  btnReindex: document.getElementById("btn-reindex"),
+  indexStatus: document.getElementById("index-status"),
 };
 
 /* -- 与 daemon 的唯一通道 ---------------------------------------------------- */
@@ -181,6 +184,7 @@ function setProjectValue(projVal) {
 function restoreFromUrl() {
   const p = new URLSearchParams(location.search);
   el.q.value = p.get("q") || "";
+  if (el.content) el.content.checked = p.get("content") === "true";
   el.archived.value = p.get("archived") || "no";
   el.since.value = p.get("since") || "";
   el.until.value = p.get("until") || "";
@@ -192,6 +196,7 @@ function readState() {
   const choice = parseAgentChoice(el.agent.value);
   return {
     q: el.q.value.trim(),
+    content: el.content ? el.content.checked : false,
     agent: choice.agent,
     rawAgent: choice.raw,
     project: el.project.value,
@@ -205,6 +210,7 @@ function readState() {
 function syncUrl(state) {
   const p = new URLSearchParams();
   if (state.q) p.set("q", state.q);
+  if (state.content) p.set("content", "true");
   if (state.rawAgent && state.rawAgent !== "scope:zed") {
     p.set("agent", state.rawAgent);
   }
@@ -402,6 +408,7 @@ async function runSearch() {
   try {
     body = await api(`${API}/search`, {
       q: state.q,
+      content: state.content ? "true" : undefined,
       agent: state.agent,
       project: el.project.value,
       archived: state.archived,
@@ -470,6 +477,19 @@ function renderHit(hit, tokens) {
     paths.className = "paths";
     paths.append(highlight(hit.projects.join("  ·  "), tokens));
     btn.append(paths);
+  }
+
+  if (hit.snippets && hit.snippets.length) {
+    for (const snip of hit.snippets) {
+      const box = document.createElement("div");
+      box.className = "snippet-box";
+      const role = document.createElement("span");
+      role.className = "s-role";
+      role.textContent = `[${snip.role || "msg"}]`;
+      box.append(role);
+      box.append(highlight(snip.text || "", tokens));
+      btn.append(box);
+    }
   }
 
   btn.addEventListener("click", () => {
@@ -782,6 +802,44 @@ function renderTrajectory(data) {
   if (tabs.length === 2) tabs[1].click();
 }
 
+/* -- 索引状态与维护 ---------------------------------------------------------- */
+
+async function refreshIndexStatus() {
+  if (!el.indexStatus) return;
+  try {
+    const res = await api(`${API}/index/status`);
+    const d = res.data || {};
+    if (d.indexed_sessions > 0) {
+      el.indexStatus.textContent = `正文索引: ${d.indexed_sessions} 会话 / ${d.indexed_messages} 消息`;
+    } else {
+      el.indexStatus.textContent = `正文索引: 未构建`;
+    }
+  } catch (e) {
+    el.indexStatus.textContent = "";
+  }
+}
+
+if (el.btnReindex) {
+  el.btnReindex.addEventListener("click", async () => {
+    el.btnReindex.disabled = true;
+    el.btnReindex.textContent = "正在构建…";
+    try {
+      const res = await api(`${API}/index/build`, { rebuild: false });
+      const stats = res.data || {};
+      showNotice(`索引更新完成：扫描 ${stats.scanned_sessions} 个会话，更新 ${stats.updated_sessions} 个，跳过 ${stats.skipped_sessions} 个，耗时 ${stats.duration_ms}ms`);
+      await refreshIndexStatus();
+      if (el.content && el.content.checked) {
+        runSearch().catch(() => {});
+      }
+    } catch (e) {
+      showNotice(`更新正文索引失败：${e.message}`);
+    } finally {
+      el.btnReindex.disabled = false;
+      el.btnReindex.textContent = "更新正文索引";
+    }
+  });
+}
+
 /* -- 事件绑定 ---------------------------------------------------------------- */
 
 let timer = null;
@@ -791,6 +849,9 @@ function schedule() {
 }
 
 el.q.addEventListener("input", schedule);
+if (el.content) {
+  el.content.addEventListener("change", () => runSearch().catch(() => {}));
+}
 el.form.addEventListener("submit", (e) => {
   e.preventDefault();
   runSearch().catch(() => {});
@@ -817,6 +878,7 @@ document.addEventListener("keydown", (e) => {
 loadOptions()
   .then(() => {
     restoreFromUrl();
+    refreshIndexStatus().catch(() => {});
     return runSearch();
   })
   .catch((e) => {

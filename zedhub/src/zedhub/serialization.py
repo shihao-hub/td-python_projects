@@ -120,6 +120,8 @@ def render_search_result(result: dict) -> None:
         criteria.append(f"until={str(query['until'])[:10]}")
     if query.get("include_unlinked"):
         criteria.append("include_unlinked=true")
+    if query.get("content"):
+        criteria.append("content=true")
     print("search: " + "  ".join(criteria))
 
     for note in result.get("degraded") or []:
@@ -144,12 +146,36 @@ def render_search_result(result: dict) -> None:
         if ids:
             context.append(ids)
         print(f"{'':<{w_kind}}  {'':<{w_agent}}       {'':<{w_match}}  {'':<16}  └ {' · '.join(context)}")
+        for s in h.get("snippets") or []:
+            role = (s.get("role") or "user").upper()
+            snip_text = s.get("text", "")
+            print(f"{'':<{w_kind}}  {'':<{w_agent}}       {'':<{w_match}}  {'':<16}    💬 [{role}] {snip_text}")
 
     total, count = result.get("total", len(hits)), result.get("count", len(hits))
     if total > count:
         print(f"\n{count}/{total} hit(s)（已截断；--limit 0 查看全部）")
     else:
         print(f"\n{count} hit(s)")
+
+
+def render_index_status(status: dict) -> None:
+    """正文全文索引状态人读版式。"""
+    print("zedhub 会话正文 FTS5 索引状态")
+    print(f"已收录会话: {status.get('indexed_sessions', 0)}")
+    print(f"已索引消息: {status.get('indexed_messages', 0)}")
+    print(f"索引库大小: {_human_size(status.get('db_size_bytes', 0))}")
+    last_built = fmt_dt(status.get("last_built_at")) if status.get("last_built_at") else "(未构建)"
+    print(f"最后构建于: {last_built}")
+
+
+def render_index_build(stats: dict) -> None:
+    """正文索引构建结果人读版式。"""
+    print("正文 FTS5 索引构建完成")
+    print(f"扫描会话数: {stats.get('scanned_sessions', 0)}")
+    print(f"已更新会话: {stats.get('updated_sessions', 0)}")
+    print(f"跳过未变动: {stats.get('skipped_sessions', 0)}")
+    print(f"索引消息数: {stats.get('indexed_messages', 0)}")
+    print(f"执行耗时  : {stats.get('duration_ms', 0)} ms")
 
 
 def render_effort_report(rep: dict) -> None:

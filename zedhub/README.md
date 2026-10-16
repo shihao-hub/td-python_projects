@@ -123,22 +123,23 @@ daemon 同时监听 `127.0.0.1:8765` 的 WebSocket 通道（仅 `threads.list` �
 
 ## 会话检索（search + Web 检索页）
 
-一期**只检索元数据**（标题 / agent / 会话与线程 id / 项目路径 / 时间 / 归档状态）；
-会话正文的全文检索是二期（语料与索引方案见
-`docs/plans/29-zedhub-session-search.md` 的「二期」与「遗留待办」）。
+支持**元数据检索**（默认）与**正文全文检索**（SQLite FTS5 + 纯标准库 CJK/代码分词）：
 
 - 语义（服务端唯一定义）：`q` 按空白切分为多关键词，**全部命中**（AND）；
-  每个关键词在标题/agent/线程 id/会话 id/项目路径任一字段做不区分大小写子串匹配；
-  `q` 为空即按过滤条件浏览；
+  - 默认（元数据）：在标题/agent/线程 id/会话 id/项目路径任一字段做不区分大小写子串匹配；
+  - 搜正文（`--content` 或 Web 端勾选「搜正文」）：联合检索会话内五大源（OpenCode/Claude Code/Codex/Antigravity/Pi）的高层纯文本消息正文，命中时附带上下文气泡摘录（snippets）；
+  - `q` 为空即按过滤条件浏览；
 - **Zed 索引是主表**：它代表「Zed 里看得见的会话」（opencode/claude-acp/codex-acp/
   antigravity-acp/pi-acp 等），OpenCode 会话按 `session_id` 关联补目录与模型；
   `--include-unlinked` 才额外列出未进 Zed 索引的 OpenCode 会话（默认隐藏，避免重复）；
-- 降级口径：Zed 库缺失照常报错；**OpenCode 库不可用不报错**，结果只含 Zed 侧并在
-  载荷 `degraded` 与页面横幅中说明（与 `stats effort` 同一口径）；
-- 三个壳同源：CLI `zedhub search`、MCP `zedhub.search.sessions`、Web 页 `/ui`。
+- **正文 FTS5 索引库**：存储在 `%APPDATA%\language_projects\zedhub\index\content_search.db`，支持用户手动触发构建与 mtime 毫秒级增量跳过；
+- 三个壳同源：CLI `zedhub search` / `zedhub index`、MCP `zedhub.search.sessions` / `zedhub.index.*`、Web 页 `/ui`。
 
 ```powershell
-uv run zedhub search zedhub                       # 关键词检索
+uv run zedhub index build                         # 构建或增量更新会话正文全文索引
+uv run zedhub index status                        # 查看正文全文索引状态
+uv run zedhub search zedhub                       # 元数据检索
+uv run zedhub search "录制" --content             # 开启正文全文检索（带上下文气泡摘录）
 uv run zedhub search "zedhub 搜索" --archived all  # 多关键词 AND + 含归档
 uv run zedhub search --agent opencode --since 2026-09-01 --json
 uv run zedhub ui --app                             # 启动并以 Chrome/Edge 独立应用窗口打开（可视化面板）

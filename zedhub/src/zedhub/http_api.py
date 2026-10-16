@@ -135,34 +135,32 @@ async def _sse_response(endpoint: HttpEndpoint, params: dict, state) -> Response
 def _extract_params(request: Request, endpoint: HttpEndpoint, body: dict) -> dict:
     """从 query/path/body 组装业务 params（业务校验仍在 api 层）。"""
     params: dict = dict(body)
-    if endpoint.method == "GET":
-        for key in request.query_params.keys():
-            value = request.query_params[key]
-            # query string 天然 str：按契约类型 coerce，与 body/RPC 口径一致
-            from .contract import QUERY_PARAM_TYPES
+    from .contract import QUERY_PARAM_TYPES
 
-            declared = QUERY_PARAM_TYPES.get(key)
-            if declared == "integer":
-                try:
-                    value = int(value)
-                except ValueError:
-                    raise InvalidParamsError(
-                        f"param '{key}' must be an integer, got {value!r}"
-                    ) from None
-            elif declared == "boolean":
-                text = value.strip().lower()
-                if text in ("1", "true", "yes", "on"):
-                    value = True
-                elif text in ("0", "false", "no", "off", ""):
-                    value = False
-                else:
-                    raise InvalidParamsError(
-                        f"param '{key}' must be a boolean, got {value!r}"
-                    )
-            params.setdefault(key, value)
-        for pp in endpoint.path_params:
-            if pp in request.path_params:
-                params[pp] = request.path_params[pp]
+    for key in request.query_params.keys():
+        value = request.query_params[key]
+        declared = QUERY_PARAM_TYPES.get(key)
+        if declared == "integer":
+            try:
+                value = int(value)
+            except ValueError:
+                raise InvalidParamsError(
+                    f"param '{key}' must be an integer, got {value!r}"
+                ) from None
+        elif declared == "boolean":
+            text = value.strip().lower()
+            if text in ("1", "true", "yes", "on"):
+                value = True
+            elif text in ("0", "false", "no", "off", ""):
+                value = False
+            else:
+                raise InvalidParamsError(
+                    f"param '{key}' must be a boolean, got {value!r}"
+                )
+        params[key] = value
+    for pp in endpoint.path_params:
+        if pp in request.path_params:
+            params[pp] = request.path_params[pp]
     return params
 
 
@@ -192,10 +190,14 @@ async def dispatch(request: Request) -> Response:
 
         body: dict = {}
         if endpoint.body_model is not None:
-            try:
-                raw = await request.json()
-            except Exception as exc:
-                raise InvalidRequestError(f"request body is not valid JSON: {exc}") from exc
+            body_bytes = await request.body()
+            if not body_bytes.strip():
+                raw = {}
+            else:
+                try:
+                    raw = json.loads(body_bytes)
+                except Exception as exc:
+                    raise InvalidRequestError(f"request body is not valid JSON: {exc}") from exc
             if not isinstance(raw, dict):
                 raise InvalidRequestError("request body must be a JSON object")
             try:

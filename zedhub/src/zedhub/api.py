@@ -336,14 +336,20 @@ SEARCH_DEFAULT_LIMIT = 50
 
 def dump_search(result: SearchResult) -> dict:
     out = result.model_dump(mode="json")
-    out["hits"] = [
-        _local(h, ("created_at", "updated_at", "interacted_at")) for h in result.hits
-    ]
+    hits = []
+    for h in result.hits:
+        hit_dict = _local(h, ("created_at", "updated_at", "interacted_at"))
+        if h.snippets:
+            hit_dict["snippets"] = [
+                _local(s, ("created_at",)) for s in h.snippets
+            ]
+        hits.append(hit_dict)
+    out["hits"] = hits
     return out
 
 
 def _search(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
-    """元数据检索：Zed 索引为主表；OpenCode 源不可用时降级而非失败。"""
+    """会话检索：元数据（主表 Zed）+ 可选正文全文检索（FTS5）。"""
     from .core.search import SearchService
 
     limit = _opt_int(params, "limit")
@@ -357,6 +363,7 @@ def _search(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
         limit=SEARCH_DEFAULT_LIMIT if limit is None else limit,
         scope=_scope(params),
         include_unlinked=_opt_bool(params, "include_unlinked"),
+        content=_opt_bool(params, "content") or False,
     )
 
     with open_snapshot(ctx.zed_db) as snap:
@@ -380,6 +387,28 @@ def _search(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     result = SearchService(threads=threads, sessions=sessions).search(request)
     result.degraded = degraded
     return dump_search(result)
+
+
+def _index_status(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
+    from .core.index import ContentIndexService
+
+    status = ContentIndexService().get_status()
+    out = status.model_dump(mode="json")
+    if out.get("last_built_at"):
+        out["last_built_at"] = _local(status, ("last_built_at",))["last_built_at"]
+    return out
+
+
+def _index_build(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
+    from .core.index import ContentIndexService
+
+    rebuild = _opt_bool(params, "rebuild") or False
+    stats = ContentIndexService().build_index(
+        rebuild=rebuild,
+        opencode_db=ctx.opencode_db,
+        progress=progress,
+    )
+    return stats.model_dump(mode="json")
 
 
 def _sessions_link(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
@@ -457,6 +486,8 @@ METHODS: dict[str, Callable[..., Any]] = {
     "sessions.show": _sessions_show,
     "sessions.content": _sessions_content,
     "search.sessions": _search,
+    "index.status": _index_status,
+    "index.build": _index_build,
     "stats.effort": _stats_effort,
     "trajectory.show": _trajectory,
     "sessions.link": _sessions_link,

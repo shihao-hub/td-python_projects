@@ -75,6 +75,12 @@ class ArchiveImportBody(BaseModel):
     apply: bool = False
 
 
+class IndexBuildBody(BaseModel):
+    """POST /api/v1/index/build 请求体。"""
+
+    rebuild: bool = False
+
+
 HEALTH = HttpEndpoint(
     method="GET",
     path=f"{API_PREFIX}/health",
@@ -129,10 +135,20 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
     ),
     HttpEndpoint(
         method="GET", path=f"{API_PREFIX}/search", api_method="search.sessions",
-        summary="Search session metadata across Zed-managed and externally discovered sessions;"
-                " content full-text search is not implemented yet.",
+        summary="Search session metadata across Zed-managed and externally discovered sessions,"
+                " optionally with full-text message content search.",
         query_params=("q", "agent", "project", "archived", "since", "until", "limit",
-                      "scope", "include_unlinked"),
+                      "scope", "include_unlinked", "content"),
+    ),
+    HttpEndpoint(
+        method="GET", path=f"{API_PREFIX}/index/status", api_method="index.status",
+        summary="Status of full-text message content search index.",
+    ),
+    HttpEndpoint(
+        method="POST", path=f"{API_PREFIX}/index/build", api_method="index.build",
+        summary="Build or update message content full-text search index (rebuild=true resets index).",
+        query_params=("rebuild",),
+        body_model=IndexBuildBody,
     ),
     HttpEndpoint(
         method="GET", path=f"{API_PREFIX}/stats/effort", api_method="stats.effort",
@@ -183,6 +199,8 @@ def find_endpoint(method: str, path: str) -> HttpEndpoint | None:
 QUERY_PARAM_TYPES: dict[str, str] = {
     "limit": "integer",
     "include_unlinked": "boolean",
+    "content": "boolean",
+    "rebuild": "boolean",
 }
 
 
@@ -256,8 +274,8 @@ MCP_TOOLS: tuple[ToolMeta, ...] = (
     ),
     ToolMeta(
         name="zedhub.search.sessions", api_method="search.sessions", result_type="object",
-        summary="Search session metadata across Zed-managed and externally discovered sessions"
-                " (content full-text search not implemented yet).",
+        summary="Search session metadata across Zed-managed and externally discovered sessions,"
+                " optionally with full-text message content search.",
         params=(
             ParamDoc("q", "Keywords, whitespace-separated; every keyword must match."),
             ParamDoc("agent", "Exact agent id, e.g. 'opencode', 'claude-acp'."),
@@ -269,7 +287,17 @@ MCP_TOOLS: tuple[ToolMeta, ...] = (
             ParamDoc("scope", "'all' (default), 'zed', or 'external'."),
             ParamDoc("include_unlinked",
                      "Compatibility flag: also lists externally discovered sessions."),
+            ParamDoc("content", "Search full-text message content in addition to metadata ('true'/'false')."),
         ),
+    ),
+    ToolMeta(
+        name="zedhub.index.status", api_method="index.status", result_type="object",
+        summary="Check status of full-text message content search index.",
+    ),
+    ToolMeta(
+        name="zedhub.index.build", api_method="index.build", result_type="object",
+        summary="Trigger manual build or incremental update of message content full-text index.",
+        params=(ParamDoc("rebuild", "Set true to wipe existing index and rebuild from scratch (default false)."),),
     ),
     ToolMeta(
         name="zedhub.stats.effort", api_method="stats.effort",

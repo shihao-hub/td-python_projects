@@ -44,6 +44,8 @@ sessions_app = typer.Typer(help="List and inspect agent sessions (OpenCode).", n
 app.add_typer(sessions_app, name="sessions")
 stats_app = typer.Typer(help="Zed overview and OpenCode effort stats.", invoke_without_command=True)
 app.add_typer(stats_app, name="stats")
+index_app = typer.Typer(help="Manage message content full-text search index.", no_args_is_help=True)
+app.add_typer(index_app, name="index")
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
@@ -597,7 +599,7 @@ def sessions_content(
         _die(f"invalid --format: {fmt} (use text | markdown)", code=2)
 
 
-# -- search（会话元数据检索；正文全文检索见计划二期） ---------------------------
+# -- search（会话元数据与正文全文检索） ---------------------------------
 
 
 @app.command()
@@ -610,14 +612,15 @@ def search(
     until: Annotated[Optional[str], typer.Option("--until", help="YYYY-MM-DD or ISO datetime (local time).")] = None,
     limit: Annotated[int, typer.Option("--limit", min=0, help="Cap results; 0 means no cap (default 50).")] = 50,
     include_unlinked: Annotated[bool, typer.Option("--include-unlinked", help="Also list OpenCode sessions missing from the Zed index.")] = False,
+    content: Annotated[bool, typer.Option("--content", help="Search full-text message content in addition to metadata.")] = False,
     host: HOST_OPT = None,
     json_out: JSON_OPT = False,
 ) -> None:
-    """Search session metadata (title/agent/id/project).
+    """Search session metadata (title/agent/id/project) and optional message content.
 
     Zed index is the primary table (every session visible in Zed); OpenCode
     sessions are joined by session id. Full-text search over message content is
-    not implemented yet (planned phase 2).
+    available when --content is passed.
     """
     from .serialization import render_search_result
 
@@ -626,11 +629,57 @@ def search(
             "GET", f"{API_PREFIX}/search",
             query={"q": query, "agent": agent, "project": project, "archived": archived,
                    "since": since, "until": until, "limit": limit,
-                   "include_unlinked": "true" if include_unlinked else None},
+                   "include_unlinked": "true" if include_unlinked else None,
+                   "content": "true" if content else None},
         )
 
     data, _ = _run_query(fn, as_json=json_out)
     _emit_new(data, as_json=json_out, renderer=render_search_result)
+
+
+# -- index（正文全文检索索引管理） ---------------------------------------------
+
+
+@index_app.command("build")
+def index_build_cmd(
+    rebuild: Annotated[bool, typer.Option("--rebuild", help="Reset index and rebuild from scratch.")] = False,
+    host: HOST_OPT = None,
+    json_out: JSON_OPT = False,
+) -> None:
+    """Build or incrementally update message content full-text search index."""
+    from .serialization import render_index_build
+
+    def fn():
+        return DaemonClient(host).call(
+            "POST", f"{API_PREFIX}/index/build",
+            query={"rebuild": "true" if rebuild else None},
+            body={"rebuild": rebuild},
+            timeout=600.0,
+        )
+
+    data, _ = _run_query(fn, as_json=json_out)
+    if json_out:
+        _emit_new(data, as_json=True)
+        return
+    render_index_build(data)
+
+
+@index_app.command("status")
+def index_status_cmd(
+    host: HOST_OPT = None,
+    json_out: JSON_OPT = False,
+) -> None:
+    """Show status of message content full-text search index."""
+    from .serialization import render_index_status
+
+    def fn():
+        return DaemonClient(host).call("GET", f"{API_PREFIX}/index/status")
+
+    data, _ = _run_query(fn, as_json=json_out)
+    if json_out:
+        _emit_new(data, as_json=True)
+        return
+    render_index_status(data)
 
 
 # -- ui（打开 daemon 托管的检索页；地址解析不触发业务） -------------------------

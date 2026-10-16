@@ -8,8 +8,8 @@
   ``opencode_session``），默认不显示以避免与 Zed 视图重复；
 - OpenCode 源不可用时由调用方降级（degraded 说明），本模块只管过滤与合并，
   不感知数据源可用性，便于脱离 SQL 单测；
-- 正文全文检索（messages/parts）不在本期范围，正文语料与索引方案见
-  `docs/plans/29-zedhub-session-search.md`「二期」。
+- 正文全文检索（messages/parts）：由 `core/index.py` 的 FTS5 引擎支持，
+  `content=True` 时联合检索元数据与正文。
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ FIELD_TITLE = "title"
 FIELD_AGENT = "agent"
 FIELD_ID = "id"
 FIELD_PROJECT = "project"
+FIELD_CONTENT = "content"
 
 
 def _utc(dt: datetime | None) -> datetime | None:
@@ -50,9 +51,16 @@ def _norm_path(p: str | None) -> str:
 class SearchService:
     """把 Zed 线程与 OpenCode 会话投影成统一条目后过滤。"""
 
-    def __init__(self, *, threads: list[Thread], sessions: list[Session] | None) -> None:
+    def __init__(
+        self,
+        *,
+        threads: list[Thread],
+        sessions: list[Session] | None,
+        index_service: Any = None,
+    ) -> None:
         self.threads = threads
         self.sessions = sessions  # None = OpenCode 源不可用（降级）
+        self.index_service = index_service
 
     # -- 条目构建 ---------------------------------------------------------------
 
@@ -154,6 +162,18 @@ class SearchService:
         project = (request.project or "").casefold()
         norm_proj = _norm_path(request.project)
 
+        content_hits: dict[str, list[Any]] = {}
+        if request.content and tokens:
+            idx_svc = self.index_service
+            if idx_svc is None:
+                from .index import ContentIndexService
+
+                idx_svc = ContentIndexService()
+            try:
+                content_hits = idx_svc.search_content(tokens)
+            except Exception:
+                content_hits = {}
+
         hits: list[SearchHit] = []
         for hit in self._hits(request.include_unlinked, request.scope):
             if request.scope == SessionScope.ZED and hit.management != "zed":
@@ -176,10 +196,22 @@ class SearchService:
                 continue
             if until and stamp > until:
                 continue
+
             matched = self._match_fields(hit, tokens)
-            if matched is None:
+            c_snippets = (
+                content_hits.get(hit.session_id)
+                if (hit.session_id and request.content)
+                else None
+            )
+
+            if matched is None and not c_snippets:
                 continue
-            hit.matched_fields = matched
+
+            matched_fields = list(matched or [])
+            if c_snippets:
+                matched_fields.append(FIELD_CONTENT)
+                hit.snippets = c_snippets
+            hit.matched_fields = sorted(set(matched_fields))
             hits.append(hit)
 
         hits.sort(key=lambda h: (self._stamp(h), h.title.casefold()), reverse=True)

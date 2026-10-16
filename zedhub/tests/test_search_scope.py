@@ -126,3 +126,43 @@ def test_zed_linked_opencode_mode_passed() -> None:
     assert hit.agent_id == "opencode"
     assert hit.mode == "plan"
     assert hit.management == "zed"
+
+
+def test_search_content_hit() -> None:
+    class DummyIndexService:
+        def search_content(self, tokens: list[str]) -> dict:
+            from zedhub.core.model import ContentSnippet
+
+            if "录制" in tokens or any("录制" in t for t in tokens):
+                return {
+                    "ses-agy": [
+                        ContentSnippet(role="user", text="有什么视频录制软件啊")
+                    ]
+                }
+            return {}
+
+    session = Session(
+        source_id="antigravity",
+        external_id="ses-agy",
+        title="(无标题)",
+        agent="antigravity",
+        directory="D:/work",
+    )
+    service = SearchService(
+        threads=[],
+        sessions=[session],
+        index_service=DummyIndexService(),
+    )
+
+    # 默认 content=False 不搜正文：无匹配
+    res_no_content = service.search(SearchRequest(q="录制", content=False))
+    assert res_no_content.total == 0
+
+    # 开启 content=True 命中正文
+    res_with_content = service.search(SearchRequest(q="录制", content=True))
+    assert res_with_content.total == 1
+    hit = res_with_content.hits[0]
+    assert hit.session_id == "ses-agy"
+    assert "content" in hit.matched_fields
+    assert len(hit.snippets) == 1
+    assert "视频录制软件" in hit.snippets[0].text

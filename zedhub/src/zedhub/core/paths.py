@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 
 # 数据目录的一级子目录及用途
-SUBDIRS = ("snapshots", "backups", "operations", "runtime")
+SUBDIRS = ("snapshots", "backups", "operations", "runtime", "index")
 
 
 def zedhub_data_dir() -> Path:
@@ -30,9 +30,14 @@ def zedhub_data_dir() -> Path:
 
 
 def data_subdir(name: str) -> Path:
-    """数据子目录（snapshots/backups/operations/runtime）；返回前确保存在。"""
+    """数据子目录（snapshots/backups/operations/runtime/index）；返回前确保存在。"""
     if name not in SUBDIRS:
         raise ValueError(f"unknown data subdir: {name!r} (expected one of {SUBDIRS})")
     d = zedhub_data_dir() / name
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def index_db_path() -> Path:
+    """会话正文 FTS5 索引库文件绝对路径。"""
+    return data_subdir("index") / "content_search.db"
