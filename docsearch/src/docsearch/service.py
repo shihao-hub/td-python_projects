@@ -1,4 +1,5 @@
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -21,6 +22,7 @@ class SearchResponse(BaseModel):
     query: str
     total: int
     results: List[SearchResultItem]
+    took_ms: float = Field(default=0.0, description="检索耗时(毫秒)")
 
 
 class IndexStats(BaseModel):
@@ -87,9 +89,10 @@ class SearchService:
         }
 
     def search(self, query: str, top_k: int = 15) -> SearchResponse:
+        t0 = time.time()
         clean_q = query.strip()
         if not clean_q:
-            return SearchResponse(query=query, total=0, results=[])
+            return SearchResponse(query=query, total=0, results=[], took_ms=0.0)
 
         # 1. 扩大向量初筛候选池（取 top_k 的 5~6 倍，至少 80 条，防止单文件多片段挤占）
         candidate_k = max(top_k * 5, 80)
@@ -139,11 +142,13 @@ class SearchService:
         final_items = [
             SearchResultItem.model_validate(it) for it in scored_items[:top_k]
         ]
+        took_ms = round((time.time() - t0) * 1000, 2)
 
         return SearchResponse(
             query=query,
             total=len(final_items),
             results=final_items,
+            took_ms=took_ms,
         )
 
     def get_stats(self) -> IndexStats:

@@ -82,6 +82,24 @@ def launch_app_window(url: str) -> bool:
     return False
 
 
+def _query_daemon_if_available(cfg, query: str, top_k: int) -> Optional[SearchResponse]:
+    """若 docsearch 后台常驻服务正在运行，优先通过 HTTP 接口秒级响应（免去重复加载模型）。"""
+    import urllib.parse
+    import urllib.request
+    h = cfg.server.host
+    p = cfg.server.port
+    url = f"http://{h}:{p}/api/search?q={urllib.parse.quote(query)}&top_k={top_k}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "docsearch-cli"})
+        with urllib.request.urlopen(req, timeout=1.5) as response:
+            if response.status == 200:
+                raw_json = json.loads(response.read().decode("utf-8"))
+                return SearchResponse.model_validate(raw_json)
+    except Exception:
+        pass
+    return None
+
+
 @app.command()
 def search(
     query: Optional[str] = typer.Argument(None, help="模糊自然语言检索词"),
@@ -113,31 +131,49 @@ def search(
         raise typer.Exit(code=1)
 
     cfg = load_config(config_file)
-    service = SearchService(cfg)
-    resp = service.search(query=query, top_k=top_k)
+
+    # 优先复用正在运行的后台服务（如有）；若未常驻则本地单次冷启动执行，即查即走
+    from_daemon = False
+    resp = _query_daemon_if_available(cfg, query=query, top_k=top_k)
+    if resp is not None:
+        from_daemon = True
+    else:
+        service = SearchService(cfg)
+        resp = service.search(query=query, top_k=top_k)
 
     if json_output:
         print(resp.model_dump_json(indent=2))
         return
 
-    console.print(f"\n[bold green]🔍 检索:[/bold green] [bold cyan]{resp.query}[/bold cyan]  (耗时: {resp.took_ms:.1f}ms, 匹配文件: {len(resp.results)})")
+    from collections import defaultdict
+    groups: Dict[str, List[SearchResultItem]] = defaultdict(list)
+    for it in resp.results:
+        groups[it.filepath].append(it)
+
+    source_tag = "[cyan][后台服务直通][/cyan]" if from_daemon else "[green][独立进程·即查即退][/green]"
+    console.print(
+        f"\n[bold green]🔍 检索:[/bold green] [bold cyan]{resp.query}[/bold cyan]  "
+        f"(耗时: {resp.took_ms:.1f}ms, 命中切块: {len(resp.results)}, 涉及文件: {len(groups)}, {source_tag})"
+    )
 
     if not resp.results:
         console.print("[yellow]未找到相关文档，请尝试换一个描述。[/yellow]\n")
         return
 
-    for item in resp.results:
-        title_text = f"📄 {item.title}  ({item.filepath})"
-        score_badge = f"[bold green]{item.score * 100:.1f}% 匹配[/bold green]"
+    for filepath, chunks in groups.items():
+        filename = chunks[0].filename
+        max_score = max(c.score for c in chunks)
+        title_text = f"📄 {filename}  [dim]({filepath})[/dim]"
+        score_badge = f"[bold green]{max_score * 100:.1f}% 匹配[/bold green]"
 
         content_lines = []
-        for c in item.chunks[:2]:
-            header_str = f"[dim]#{c.chunk_index} (相似度: {c.score:.3f})[/dim]"
-            preview_clean = c.content[:160].replace("\n", " ").strip()
-            content_lines.append(f"{header_str}\n{preview_clean}...")
+        for c in chunks[:3]:
+            head_info = f"[dim]L{c.start_line}-L{c.end_line} | {c.heading or '正文'} (相似度: {c.score * 100:.1f}%)[/dim]"
+            preview_clean = c.content[:200].replace("\n", " ").strip()
+            content_lines.append(f"{head_info}\n{preview_clean}...")
 
-        if len(item.chunks) > 2:
-            content_lines.append(f"[dim]... 其余 {len(item.chunks) - 2} 处匹配切块已折叠[/dim]")
+        if len(chunks) > 3:
+            content_lines.append(f"[dim]... 其余 {len(chunks) - 3} 处匹配切块已折叠[/dim]")
 
         body = "\n\n".join(content_lines)
         console.print(Panel(body, title=f"{title_text} - {score_badge}", border_style="blue", padding=(0, 1)))
