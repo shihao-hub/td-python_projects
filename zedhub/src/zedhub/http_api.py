@@ -367,7 +367,11 @@ def run_server(
     app = build_app(
         zed_db=zed_db, opencode_db=opencode_db, lifespan=lifespan
     )
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    # log_config=None：日志统一由 logx 接管（Nuitka 打包后 dictConfig 解析
+    # uvicorn.logging.DefaultFormatter 会失败，且我们本就要文件优先双写）
+    config = uvicorn.Config(
+        app, host=host, port=port, log_level="warning", log_config=None
+    )
     server = uvicorn.Server(config)
     listen_sock = None
     if port == 0:

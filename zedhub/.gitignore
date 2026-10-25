@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 dist/
 build/
+bin/
 
 # 测试与工具缓存
 .pytest_cache/

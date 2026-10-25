@@ -197,8 +197,13 @@ def serve_with_lifecycle(
     auto_spawned: bool = False,
     idle_timeout_s: float = IDLE_TIMEOUT_DEFAULT_S,
     ws_port: int | None = None,
+    on_ready=None,
 ) -> None:
-    """带生命周期管理的 daemon 启动（serve 命令的实际实现）。"""
+    """带生命周期管理的 daemon 启动（serve 命令与 GUI 内嵌壳共用）。
+
+    ``on_ready(server, http_port, ws_port)`` 在监听就绪后回调；GUI 用它保存
+    uvicorn server 引用，实现关窗时的优雅退出。
+    """
     actual_port = default_http_port() if port is None else port
     actual_ws_port = default_ws_port() if ws_port is None else ws_port
 
@@ -251,6 +256,8 @@ def serve_with_lifecycle(
         if watchdog is not None:
             app.state.daemon.last_activity = time.monotonic()
             watchdog.start(server, app.state.daemon)
+        if on_ready is not None:
+            on_ready(server, http_port, ws_port_actual)
 
     async def on_shutdown() -> None:
         if watchdog is not None:

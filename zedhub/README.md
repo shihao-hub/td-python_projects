@@ -6,6 +6,7 @@ Zed + OpenCode agent 会话统一工具：会话检索、完整内容查看、�
 ## 架构（v2 daemon 标准）
 
 ```
+zedhub-gui    ← 桌面壳（pywebview + 系统托盘 + 内嵌 daemon；窗口指向 /ui）
 zedhub serve  ← 唯一业务进程（daemon）：HTTP+JSON API（prod 固定 127.0.0.1:8766；
                 dev 动态端口，实际地址见 <数据根>/runtime/daemon.json）
 zedhub <cmd>  ← CLI 薄客户端：参数解析 → HTTP → 渲染
@@ -83,6 +84,7 @@ zedhub mcp    ← MCP 桥：stdio(MCP) ↔ HTTP daemon
 | HTTP 端口 | 动态（0），实际值写地址文件 | 固定 `127.0.0.1:8766` |
 | WS 冻结通道 | 默认关闭（`--ws-port 0`） | 固定 `127.0.0.1:8765` |
 | 单实例 | `runtime/daemon.lock`（OS 文件锁） | 同左，不同目录天然隔离 |
+| 桌面壳 | `gui.lock` + `window.json`，内嵌 dev daemon | 同左，prod daemon |
 | 日志 | `<数据根>/runtime/daemon.log`（2 MB × 1 轮转） | 同左 |
 
 - **覆盖开关**：`ZEDHUB_CHANNEL=dev|prod`（测试与排障用），未设置时按构建
@@ -185,9 +187,54 @@ uv run zedhub ui                                  # 打开 Web 检索页（--pri
 - 页面只调 `/api/v1`（`/search`、`/stats`、`/projects`、`/threads/{id}`、
   `/sessions/{id}`、`/sessions/{id}/content`），不含任何业务逻辑。
 
+## 桌面壳（`zedhub-gui`）
+
+自有桌面壳，不再依赖 `Chrome --app` 借壳：
+
+- **形态**：pywebview（WebView2）窗口 + 系统托盘；窗口只加载 daemon 的 `/ui`，
+  不 import `core`、不直连数据库；
+- **内嵌 daemon**：壳内后台线程跑同一 `serve_with_lifecycle`（同一 Handler）；
+  已有 CLI `zedhub serve` 在跑时直接复用其地址，不重复起进程；
+- **关窗行为**：点 X **销毁窗口**（WebView2 子进程随之退出并 `gc.collect()`，
+  对齐 go-wails 的 WindowClosing 放行 + FreeOSMemory），进程留托盘；托盘
+  「显示窗口」按上次几何重建窗口，只有「退出」才优雅停 daemon；
+- **单实例**：`<数据根>/gui.lock`（OS 文件锁），重复启动弹提示后退出；
+- **窗口几何**：`<数据根>/window.json`，移动/缩放 700 ms 防抖保存；最大化只记
+  标记、不覆盖还原尺寸；离屏坐标（拔外接屏 / 最小化 -25600）不写回；
+- **图标双通道**：dev 用 Python 双蛇图标（`docs/assets/.../python-default.ico`），
+  release 用专属三环枢纽（青绿/黄绿/琥珀，避开 Google 四色与 Antigravity 的 A 形）；
+  由 `scripts/render_icon.py` 生成 PNG/ICO/SVG，窗口、托盘、exe 三处同源。
+
+```powershell
+uv run zedhub-gui              # 开发态直接启动桌面壳（无需先 serve）
+uv run scripts/render_icon.py  # 重新生成图标资产
+```
+
+## 构建（Nuitka 双通道 exe）
+
+`bin/` 为构建产物目录（已 gitignore），产物与通道严格对应：
+
+| 通道 | 产物 |
+|---|---|
+| dev | `bin/zedhub-gui-dev.exe` + `bin/zedhub-cli-dev.exe` |
+| release | `bin/zedhub-gui.exe` + `bin/zedhub-cli.exe` |
+
+```powershell
+uv run scripts/build_exe.py            # 自动判定：无干净 tag → dev
+uv run scripts/build_exe.py --release  # 仅 HEAD 命中 zedhub-v* 且工作区干净
+uv run scripts/build_exe.py --dir      # standalone 目录版（默认 onefile）
+```
+
+- GUI 与 CLI 子系统不同：GUI 无控制台（`--windows-console-mode=disable`），CLI
+  控制台；禁止合成单产物（GUI 子系统拿不到终端管道，会顶掉 prompt）；
+- PE 版本 / 描述 / 图标由 `--file-version` / `--windows-icon-from-ico` 写入；
+  dev 构建用 Python 双蛇图标（同时打包为运行期 `icon-dev.ico`），release 用专属图标；
+- 首次构建需 MSVC（VS 2022 Build Tools），产物约 36 MB/个。
+
 ## 常用命令
 
 ```powershell
+uv run zedhub-gui                            # 桌面壳（窗口 + 托盘，内嵌 daemon）
 uv run zedhub serve                          # 前台启动 daemon
 uv run zedhub sessions list --project xxx    # 会话列表（zed_linked 标记）
 uv run zedhub sessions content ses_xxx --format markdown -o out.md

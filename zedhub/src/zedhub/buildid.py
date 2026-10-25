@@ -42,8 +42,11 @@ def is_production_build() -> bool:
 def source_fingerprint() -> str:
     """源码指纹（12 hex）：单边重启检测用，生产构建不参与 buildID。"""
     root = Path(__file__).resolve().parent
+    sources = sorted(root.rglob("*.py"))
+    if not sources:
+        return "frozen"  # Nuitka 打包后无 .py：源码指纹不再适用
     h = hashlib.sha256()
-    for p in sorted(root.rglob("*.py")):
+    for p in sources:
         rel = p.relative_to(root).as_posix()
         st = p.stat()
         h.update(f"{rel}:{st.st_size}:{st.st_mtime_ns}\n".encode())
