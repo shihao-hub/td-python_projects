@@ -5,8 +5,9 @@
 发现优先级（v2 §2.2）：
 1. ``--host`` 参数（host:port）；
 2. ``ZEDHUB_HOST`` 环境变量；
-3. 地址文件（daemon 启动时写入的 runtime/daemon.json）；
-4. 内置默认 127.0.0.1:8766。
+3. 地址文件（daemon 启动时写入的 ``<通道目录>/runtime/daemon.json``）；
+4. 通道默认：prod 固定 ``127.0.0.1:8766``；dev 端口动态（0），无地址文件
+   即视为 daemon 未运行。
 
 自动拉起仅限生产构建且未显式指定地址；开发构建一律报错并提示先
 ``zedhub serve``。
@@ -25,26 +26,21 @@ import urllib.request
 from pathlib import Path
 
 from .buildid import build_id, is_production_build
+from .channel import runtime_dir
 from .contract import (
     API_PREFIX,
     DEFAULT_HTTP_HOST,
     DEFAULT_HTTP_PORT,
     SPAWN_WAIT_TIMEOUT_S,
     ZEDHUB_HOST_ENV,
+    default_http_port,
 )
 from .core.errors import DaemonUnreachableError, ZedhubError, exc_from_payload
 
 
 def _runtime_dir() -> Path:
-    """数据目录的 runtime 子目录（与 core/paths 同一约定；壳不 import core）。"""
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        base = Path(appdata) / "language_projects" / "zedhub"
-    else:
-        base = Path.home() / ".language_projects" / "zedhub"
-    d = base / "runtime"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """当前通道的 runtime 子目录（与 core/paths 同一真源；壳不 import core）。"""
+    return runtime_dir()
 
 
 def read_address_file() -> dict | None:
@@ -88,13 +84,18 @@ class DaemonClient:
             h, p = _parse_host(env)
             return h, p, "env"
         info = read_address_file()
-        if info and isinstance(info.get("port"), int):
+        if info and isinstance(info.get("port"), int) and int(info["port"]) > 0:
             return str(info.get("host", DEFAULT_HTTP_HOST)), int(info["port"]), "address_file"
-        return DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, "default"
+        return DEFAULT_HTTP_HOST, default_http_port(), "default"
 
     def ensure_connected(self) -> tuple[str, int]:
         """确保可连：必要时自动拉起（仅生产构建且未显式指定地址）。"""
         host, port, source = self.resolve()
+        if port <= 0:
+            # dev 通道端口动态：没有地址文件就无从连接，也不允许猜端口
+            raise DaemonUnreachableError(
+                "daemon 未运行（dev 通道端口动态，需先启动）；请运行: uv run zedhub serve"
+            )
         if self._probe(host, port):
             self._addr, self._addr_source = (host, port), source
             return self._addr
@@ -132,7 +133,11 @@ class DaemonClient:
         return False
 
     def _spawn(self, host: str, port: int) -> None:
-        """拉起 daemon：脱离父子关系（detach），stderr 落 runtime/daemon.log。"""
+        """拉起 daemon：脱离父子关系（detach）。
+
+        stderr 落 ``runtime/daemon.boot.log``（解释器/import 期崩溃兜底）；
+        daemon 起来后由 ``logx`` 接管写 ``runtime/daemon.log``。
+        """
         if host not in (DEFAULT_HTTP_HOST, "localhost", "::1"):
             raise DaemonUnreachableError(f"拒绝在非回环地址拉起 daemon: {host}")
         # 拉起互斥：二次探测，已有可用实例或端口被占用时放弃拉起
@@ -144,7 +149,7 @@ class DaemonClient:
         except OSError:
             pass
 
-        log = _runtime_dir() / "daemon.log"
+        log = _runtime_dir() / "daemon.boot.log"
         creationflags = 0
         if sys.platform == "win32":
             creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

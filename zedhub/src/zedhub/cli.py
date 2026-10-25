@@ -134,8 +134,8 @@ def main(
 @app.command()
 def serve(
     host: Annotated[str, typer.Option("--host", help="Loopback bind address (127.0.0.1/localhost/::1).")] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port", help="HTTP API port.")] = 8766,
-    ws_port: Annotated[int, typer.Option("--ws-port", help="WebSocket channel port (0 disables). Frozen learning channel; use HTTP for automation.")] = 8765,
+    port: Annotated[Optional[int], typer.Option("--port", help="HTTP API port (default: prod 8766; dev 0 = dynamic).")] = None,
+    ws_port: Annotated[Optional[int], typer.Option("--ws-port", help="WebSocket channel port (0 disables; default: prod 8765; dev 0 = dynamic). Frozen learning channel; use HTTP for automation.")] = None,
     db: Annotated[Optional[Path], typer.Option("--db", help="Zed db.sqlite (or its dir). Defaults to Zed's live location.")] = None,
     opencode_db: Annotated[Optional[Path], typer.Option("--opencode-db", help="opencode.db path. Defaults to auto-detect.")] = None,
     auto_spawned: Annotated[bool, typer.Option("--auto-spawned", help="(internal) mark daemon as auto-spawned.", hidden=True)] = False,
@@ -148,7 +148,26 @@ def serve(
             err=True,
         )
         raise typer.Exit(code=2)
+
+    from . import logx
+    from .channel import channel, data_dir, runtime_dir
+    from .contract import default_http_port, default_ws_port
     from .lifecycle import serve_with_lifecycle
+
+    data_dir()  # 建目录 + 首次旧数据迁移
+    log_path = logx.init_logging(runtime_dir() / "daemon.log")
+    logx.install_excepthook()
+    configured_port = port if port is not None else default_http_port()
+    configured_ws = ws_port if ws_port is not None else default_ws_port()
+    logx.banner(
+        version=package_version(),
+        build=build_id(),
+        channel=channel(),
+        data=data_dir(),
+        log=log_path,
+        port=configured_port or "dynamic",
+        ws=configured_ws or "dynamic",
+    )
 
     try:
         serve_with_lifecycle(

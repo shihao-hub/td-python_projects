@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import socket
 import sys
 import time
 import traceback
@@ -280,6 +281,36 @@ def build_app(
     return app
 
 
+def _prebind(host: str, port: int) -> tuple[socket.socket, int]:
+    """预先绑定监听 socket（port=0 时用来获取真实端口，再交给 uvicorn）。
+
+    uvicorn 在 lifespan startup 之后才 bind，动态端口在该阶段不可知；这里
+    先 bind 拿到实际端口，同一 socket 传给 ``Server.run(sockets=...)``。
+    """
+    last_error: OSError | None = None
+    for family, socktype, proto, _canon, addr in socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+    ):
+        sock = socket.socket(family, socktype, proto)
+        try:
+            sock.bind(addr)
+            return sock, sock.getsockname()[1]
+        except OSError as exc:
+            last_error = exc
+            sock.close()
+    raise last_error or OSError(f"cannot bind {host}:{port}")
+
+
+def _server_port(server, default: int = 0) -> int:
+    """从已启动的 asyncio server 读取实际监听端口。"""
+    try:
+        for sock in getattr(server, "sockets", None) or []:
+            return int(sock.getsockname()[1])
+    except OSError:
+        pass
+    return default
+
+
 def run_server(
     *,
     host: str = "127.0.0.1",
@@ -293,11 +324,15 @@ def run_server(
     """前台运行 daemon（uvicorn 承载 + WS 学习通道并行）。
 
     lifecycle（任务 7）挂 on_* 钩子；ws_port=0 关闭 WS 通道。
+    ``on_start(server, app, http_port, ws_port)`` 收到的是实际监听端口
+    （port=0 动态探测时不是 0）。
     """
     import contextlib
 
     import uvicorn
     from concurrent.futures import ThreadPoolExecutor
+
+    bound = {"http": port, "ws": 0}
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -310,10 +345,11 @@ def run_server(
         if ws_port:
             from .ws import WsChannel
 
-            channel = WsChannel(app.state.daemon)
-            ws_server = await channel.start(port=ws_port)
+            ws_channel = WsChannel(app.state.daemon)
+            ws_server = await ws_channel.start(port=ws_port)
+            bound["ws"] = _server_port(ws_server, 0)
         if on_start is not None:
-            r = on_start(server, app)  # 钩子拿到 server 引用（空闲退出触发用）
+            r = on_start(server, app, bound["http"], bound["ws"])  # 钩子拿到 server 引用
             if asyncio.iscoroutine(r):
                 await r
         try:
@@ -333,4 +369,14 @@ def run_server(
     )
     config = uvicorn.Config(app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(config)
-    server.run()
+    listen_sock = None
+    if port == 0:
+        listen_sock, bound["http"] = _prebind(host, 0)
+    try:
+        server.run(sockets=[listen_sock] if listen_sock is not None else None)
+    finally:
+        if listen_sock is not None:
+            try:
+                listen_sock.close()
+            except OSError:
+                pass

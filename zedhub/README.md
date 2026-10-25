@@ -6,12 +6,13 @@ Zed + OpenCode agent 会话统一工具：会话检索、完整内容查看、�
 ## 架构（v2 daemon 标准）
 
 ```
-zedhub serve  ← 唯一业务进程（daemon）：HTTP+JSON API @ 127.0.0.1:8766（唯一契约）
+zedhub serve  ← 唯一业务进程（daemon）：HTTP+JSON API（prod 固定 127.0.0.1:8766；
+                dev 动态端口，实际地址见 <数据根>/runtime/daemon.json）
 zedhub <cmd>  ← CLI 薄客户端：参数解析 → HTTP → 渲染
 zedhub ui     ← 打开 daemon 托管的 Web 检索页 @ /ui（同样是薄客户端）
 zedhub rpc    ← 兼容 JSON-RPC 薄壳（方法表冻结；rpc.discover 本地响应）
 zedhub mcp    ← MCP 桥：stdio(MCP) ↔ HTTP daemon
-（WebSocket 学习通道并存于 daemon 进程 @ 127.0.0.1:8765，见下文冻结声明）
+（WebSocket 学习通道仅在 prod 默认开启 @ 127.0.0.1:8765，dev 默认关闭）
 ```
 
 - Service 层（数据库访问、业务逻辑、写编排）**只存在于 daemon**；壳内只有
@@ -20,9 +21,12 @@ zedhub mcp    ← MCP 桥：stdio(MCP) ↔ HTTP daemon
   不访问数据库。
 - **daemon 生命周期**：
   - 地址发现优先级：`--host` → `ZEDHUB_HOST` 环境变量 → 地址文件
-    （`runtime/daemon.json`）→ 默认 `127.0.0.1:8766`；
+    （`<通道目录>/runtime/daemon.json`）→ 通道默认（prod 固定 8766；
+    dev 无默认端口，必须先 `zedhub serve`）；
+  - **启动互斥**：`runtime/daemon.lock` OS 文件锁，进程退出自动释放；
+    动态端口下不靠「端口占用」判定，避免两个 daemon 并存；
   - **自动拉起仅生产构建**（包版本为干净发布号）：连接失败且未显式指定地址时
-    detach 拉起（stderr 落 `runtime/daemon.log`），拉起互斥；
+    detach 拉起（启动期 stderr 落 `runtime/daemon.boot.log`），拉起互斥；
   - **开发构建一律不拉起**：报错并提示先 `zedhub serve`；
   - **buildID 握手**：壳请求带 `X-Zedhub-Build`；开发态 buildID 为源码指纹，
     改代码只重启一边会被当场检出（提示重启 daemon）；
@@ -67,11 +71,30 @@ zedhub mcp    ← MCP 桥：stdio(MCP) ↔ HTTP daemon
   名匹配不可靠），靠「已存在即跳过」的文件级安全策略保证不写坏在用文件；
   Zed db 写入前的 zed/opencode 进程检查照常强制。
 
-## 本地数据目录（强约束）
+## 通道隔离（dev / prod，强约束）
 
-快照、备份、operation journal、daemon 地址文件/日志只写入
-`%APPDATA%\language_projects\zedhub\`（无 APPDATA 时回退
-`~/.language_projects/zedhub/`），绝不写入 Zed/OpenCode 数据库所在目录。
+数据目录、daemon 地址文件、实例锁、日志、索引库全部按通道分离，开发调试
+绝不读写生产数据：
+
+| 维度 | dev | prod |
+|---|---|---|
+| 判定 | 包版本含 `.dev` / `+`（无 tag，或 tag 后有新提交） | 干净发布号（HEAD 恰在 `zedhub-v*` tag） |
+| 数据根 | `%APPDATA%\language_projects\zedhub\dev\` | `...\zedhub\prod\` |
+| HTTP 端口 | 动态（0），实际值写地址文件 | 固定 `127.0.0.1:8766` |
+| WS 冻结通道 | 默认关闭（`--ws-port 0`） | 固定 `127.0.0.1:8765` |
+| 单实例 | `runtime/daemon.lock`（OS 文件锁） | 同左，不同目录天然隔离 |
+| 日志 | `<数据根>/runtime/daemon.log`（2 MB × 1 轮转） | 同左 |
+
+- **覆盖开关**：`ZEDHUB_CHANNEL=dev|prod`（测试与排障用），未设置时按构建
+  形态推导；
+- **一次性迁移**：首次进入通道目录时，把整改前扁平目录里的 `index/` 与
+  `operations/` **复制**过来（旧文件保留不删）；`backups/`、`snapshots/`
+  体积大且可回溯，留在旧根目录；
+- 快照、备份、operation journal、地址文件/日志/锁绝不写入 Zed/OpenCode
+  数据库所在目录；
+- **规范豁免**：zedhub 是 uv 运行的 Python CLI，不产 exe，go-wails 规范中的
+  PE 图标 / `-H windowsgui` / 双 exe 产物 / 窗口几何记忆均不适用；适用的
+  「`serve` 托管 WebUI」与「浏览器独立窗口（`ui --app`）」已对齐。
 
 ## 写操作安全
 
@@ -117,9 +140,10 @@ uv run zedhub sessions link "D:\path\from" --target "D:\path\to" --exact      # 
 
 ## WebSocket 冻结声明
 
-daemon 同时监听 `127.0.0.1:8765` 的 WebSocket 通道（仅 `threads.list` 与
-`stats` 两个只读方法）。该通道是**一次性学习实现**：本轮实现后冻结，不再
-新增任何方法或能力；生产与自动化用途一律使用 HTTP API。
+prod 通道下 daemon 同时监听 `127.0.0.1:8765` 的 WebSocket 通道（仅
+`threads.list` 与 `stats` 两个只读方法）；dev 通道默认关闭该通道以避开端口
+冲突，需要时显式 `--ws-port 8765`。该通道是**一次性学习实现**：本轮实现后
+冻结，不再新增任何方法或能力；生产与自动化用途一律使用 HTTP API。
 
 ## 会话检索（search + Web 检索页）
 
@@ -132,7 +156,7 @@ daemon 同时监听 `127.0.0.1:8765` 的 WebSocket 通道（仅 `threads.list` �
 - **Zed 索引是主表**：它代表「Zed 里看得见的会话」（opencode/claude-acp/codex-acp/
   antigravity-acp/pi-acp 等），OpenCode 会话按 `session_id` 关联补目录与模型；
   `--include-unlinked` 才额外列出未进 Zed 索引的 OpenCode 会话（默认隐藏，避免重复）；
-- **正文 FTS5 索引库**：存储在 `%APPDATA%\language_projects\zedhub\index\content_search.db`，支持用户手动触发构建与 mtime 毫秒级增量跳过；
+- **正文 FTS5 索引库**：存储在 `<数据根>/index/content_search.db`，支持用户手动触发构建与 mtime 毫秒级增量跳过；
 - 三个壳同源：CLI `zedhub search` / `zedhub index`、MCP `zedhub.search.sessions` / `zedhub.index.*`、Web 页 `/ui`。
 
 ```powershell
@@ -150,7 +174,8 @@ uv run zedhub ui                                  # 打开 Web 检索页（--pri
 
 - **独立面板与 PWA**：支持 `zedhub ui --app` 自动检测 Chrome / Edge 并以独立应用窗口（无地址栏/沉浸面板）打开；同时提供 PWA `manifest.json` 与专属图标，可直接由浏览器安装至系统桌面；
 
-- 地址：`http://127.0.0.1:8766/ui`（端口随 daemon；`zedhub ui` 会按地址发现打开正确地址）；
+- 地址：`http://127.0.0.1:<port>/ui`（prod 固定 8766；dev 动态，实际值见
+  `<数据根>/runtime/daemon.json`；`zedhub ui` 会按地址发现打开正确地址）；
 - 形态：搜索框（`/` 聚焦、`Esc` 清空、输入防抖）+ 过滤行（agent/项目/归档三态/起止日期/
   含未关联会话）+ 结果列表（标题命中高亮、agent 与来源徽章、项目路径）+ 详情面板
   （点开看所属会话；OpenCode 会话可点「加载正文」按需取前 50 条消息）；

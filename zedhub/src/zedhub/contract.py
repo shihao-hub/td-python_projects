@@ -23,6 +23,21 @@ ZEDHUB_HOST_ENV = "ZEDHUB_HOST"
 # 自动拉起后等待地址文件 + 握手的超时（秒）
 SPAWN_WAIT_TIMEOUT_S = 10.0
 
+
+def default_http_port() -> int:
+    """通道默认 HTTP 端口：prod 固定 8766；dev 用 0（动态探测）。"""
+    from .channel import channel
+
+    return DEFAULT_HTTP_PORT if channel() == "prod" else 0
+
+
+def default_ws_port() -> int:
+    """通道默认 WS 端口：prod 固定 8765；dev 用 0（关闭冻结学习通道）。"""
+    from .channel import channel
+
+    return DEFAULT_WS_PORT if channel() == "prod" else 0
+
+
 # -- HTTP 端点声明 ---------------------------------------------------------------
 # http_api.py 按本清单注册路由并绑定 api.call；schema 导出按同一清单输出契约。
 

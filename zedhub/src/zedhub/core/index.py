@@ -1,9 +1,10 @@
 """多源 Agent 会话正文全文检索服务（SQLite FTS5 + 纯标准库 CJK/代码分词）。
 
-- 存储位置：%APPDATA%\\language_projects\\zedhub\\index\\content_search.db；
+- 存储位置：`%APPDATA%\\language_projects\\zedhub\\<通道>\\index\\content_search.db`；
 - 索引语料：OpenCode / Claude Code / Codex / Antigravity / Pi 五大源的纯文本消息；
 - 分词算法：纯标准库 CJK 1-gram + 2-gram 结合英文代码标识符切分，零外部第三方依赖；
-- 增量机制：基于 session.updated_at 记录跳过未变动会话，支持手动增量与全量重建。
+- 增量机制：基于 session.updated_at 记录跳过未变动会话，支持手动增量与全量重建；
+- 并发：daemon 与 CLI/多个写者可能同时打开索引库，统一 WAL + busy_timeout。
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -34,6 +36,10 @@ _MAX_TEXT_LEN = 100_000
 
 # 正文上下文摘录前后窗口半径（字符数）
 _SNIPPET_RADIUS = 35
+
+# SQLite 并发守卫：daemon 与 CLI 可能同时打开同一索引库
+SQLITE_TIMEOUT_S = 5.0
+SQLITE_BUSY_TIMEOUT_MS = 5000
 
 
 def tokenize_text(text: str) -> str:
@@ -109,9 +115,15 @@ class ContentIndexService:
     def __init__(self, db_path: Path | None = None) -> None:
         self.db_path = db_path or paths.index_db_path()
 
+    def _connect(self) -> sqlite3.Connection:
+        """统一连接入口：显式超时 + busy_timeout，避免并发写直接 SQLITE_BUSY。"""
+        con = sqlite3.connect(self.db_path, timeout=SQLITE_TIMEOUT_S)
+        con.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+        return con
+
     def _get_connection(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(self.db_path)
+        con = self._connect()
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
         self._init_tables(con)
@@ -150,7 +162,7 @@ class ContentIndexService:
         """获取当前索引库的元数据状态。"""
         if not self.db_path.is_file():
             return IndexStatus()
-        with sqlite3.connect(self.db_path) as con:
+        with closing(self._connect()) as con:
             row = con.execute(
                 """
                 SELECT count(session_key), coalesce(sum(message_count), 0), max(indexed_at)
@@ -301,7 +313,7 @@ class ContentIndexService:
         fts_match_query = " ".join(f'"{t}"' for t in query_terms)
 
         results: dict[str, list[ContentSnippet]] = {}
-        with sqlite3.connect(self.db_path) as con:
+        with closing(self._connect()) as con:
             # 限制单次检索返回的消息行数，避免大库无意义提取
             cursor = con.execute(
                 """

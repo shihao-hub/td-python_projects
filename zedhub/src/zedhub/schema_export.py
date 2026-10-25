@@ -33,7 +33,8 @@ def _http_channel() -> dict:
         )
     return {
         "interface": "http",
-        "base_url": "http://127.0.0.1:8766",
+        "base_url": "http://127.0.0.1:8766（prod 默认；dev 通道端口动态，以地址文件为准）",
+        "discovery": "<dataDir>/runtime/daemon.json 记录实际 host/port/ws_port",
         "envelope": {
             "ok": {"ok": True, "data": "...", "meta": {"count": "int?", "elapsed_ms": "int"}},
             "error": {"ok": False, "error": {"code": "str", "message": "str"}},
@@ -93,7 +94,7 @@ def _mcp_channel() -> dict:
 
 def _ws_channel() -> dict:
     out = dict(contract.WS_PROTOCOL)
-    out["default_url"] = "ws://127.0.0.1:8765"
+    out["default_url"] = "ws://127.0.0.1:8765（prod 默认；dev 通道动态，见地址文件 ws_port）"
     return out
 
 
