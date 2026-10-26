@@ -1,12 +1,22 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>zedhub 会话检索</title>
 <link rel="icon" type="image/svg+xml" href="/ui/icon.svg">
 <link rel="manifest" href="/ui/manifest.json">
-<meta name="theme-color" content="#18181b">
+<meta name="theme-color" content="#121316">
+<script>
+/* 首帧前应用已保存的主题，避免浅色偏好者看到一闪的暗色 */
+try {
+  var saved = localStorage.getItem("zedhub.theme");
+  if (saved === "light" || saved === "dark") {
+    document.documentElement.dataset.theme = saved;
+  }
+} catch (_) {}
+</script>
 <link rel="stylesheet" href="/ui/style.css">
 </head>
 <body>
@@ -19,6 +29,15 @@
     <button id="btn-reindex" type="button" class="btn-subtle" title="增量更新会话正文 FTS5 索引">更新正文索引</button>
     <span id="index-status" class="index-status-pill"></span>
     <span id="status" class="status" role="status" aria-live="polite"></span>
+    <button id="btn-theme" type="button" class="icon-btn" aria-label="切换为浅色主题" title="切换主题（暗色 / 浅色）">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4.2"></circle>
+        <path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"></path>
+      </svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1Z"></path>
+      </svg>
+    </button>
   </div>
 </header>
 <div id="notice" class="notice" hidden></div>

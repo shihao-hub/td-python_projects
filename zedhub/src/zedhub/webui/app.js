@@ -5,6 +5,9 @@ const API = "/api/v1";
 const MAX_MESSAGES = 50;        // 详情里最多渲染的消息条数（正文按需加载）
 const MAX_TEXT_PER_MSG = 4000;  // 单条消息渲染上限，避免长正文压垮页面
 
+const THEME_KEY = "zedhub.theme";
+const THEME_META_COLOR = { dark: "#121316", light: "#faf9f7" };
+
 const el = {
   form: document.getElementById("filters"),
   q: document.getElementById("q"),
@@ -20,16 +23,76 @@ const el = {
   notice: document.getElementById("notice"),
   btnReindex: document.getElementById("btn-reindex"),
   indexStatus: document.getElementById("index-status"),
+  themeBtn: document.getElementById("btn-theme"),
 };
+
+/* -- 主题：默认暗色，浅色可选并记住 ------------------------------------------ */
+
+function readTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === "light" || saved === "dark") return saved;
+  } catch (_) {
+    /* 存储不可用时回落到 DOM 上的初始值 */
+  }
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+
+function applyTheme(theme, persist) {
+  const next = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  if (persist) {
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch (_) {
+      /* 隐私模式等场景忽略 */
+    }
+  }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", THEME_META_COLOR[next]);
+  if (el.themeBtn) {
+    el.themeBtn.setAttribute(
+      "aria-label",
+      next === "dark" ? "切换为浅色主题" : "切换为暗色主题"
+    );
+    el.themeBtn.title = next === "dark" ? "切换为浅色主题" : "切换为暗色主题";
+  }
+  /* 桌面壳：把 Windows 标题栏一起切过去；浏览器打开时没有这个桥 */
+  try {
+    const bridge = window.pywebview && window.pywebview.api;
+    if (bridge && typeof bridge.set_theme === "function") bridge.set_theme(next);
+  } catch (_) {
+    /* 桥未就绪或调用失败不影响页面主题 */
+  }
+}
+
+function initTheme() {
+  applyTheme(readTheme(), false);
+  if (el.themeBtn) {
+    el.themeBtn.addEventListener("click", () => {
+      const current = document.documentElement.dataset.theme;
+      applyTheme(current === "light" ? "dark" : "light", true);
+    });
+  }
+  /* pywebview 的桥在页面加载后才注入，就绪时补发一次给标题栏 */
+  window.addEventListener("pywebviewready", () => applyTheme(readTheme(), false));
+}
 
 /* -- 与 daemon 的唯一通道 ---------------------------------------------------- */
 
-async function api(path, params) {
+async function api(path, params, payload) {
   const url = new URL(path, location.origin);
   for (const [k, v] of Object.entries(params || {})) {
     if (v !== "" && v !== null && v !== undefined && v !== false) url.searchParams.set(k, v);
   }
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  const init = { headers: { Accept: "application/json" } };
+  if (payload !== undefined) {
+    /* 契约里 body_model 非空的端点只接受 POST JSON；GET 同路径会命中 404 兜底 */
+    init.method = "POST";
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(payload);
+  }
+  const res = await fetch(url, init);
   const body = await res.json().catch(() => null);
   if (!res.ok || !body || body.ok === false) {
     const err = (body && body.error) || { code: `http_${res.status}`, message: res.statusText };
@@ -824,7 +887,7 @@ if (el.btnReindex) {
     el.btnReindex.disabled = true;
     el.btnReindex.textContent = "正在构建…";
     try {
-      const res = await api(`${API}/index/build`, { rebuild: false });
+      const res = await api(`${API}/index/build`, null, { rebuild: false });
       const stats = res.data || {};
       showNotice(`索引更新完成：扫描 ${stats.scanned_sessions} 个会话，更新 ${stats.updated_sessions} 个，跳过 ${stats.skipped_sessions} 个，耗时 ${stats.duration_ms}ms`);
       await refreshIndexStatus();
@@ -874,6 +937,8 @@ document.addEventListener("keydown", (e) => {
 });
 
 /* -- 启动 -------------------------------------------------------------------- */
+
+initTheme();
 
 loadOptions()
   .then(() => {

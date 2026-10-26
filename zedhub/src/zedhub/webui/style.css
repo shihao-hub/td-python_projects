@@ -1,35 +1,47 @@
-/* zedhub 检索页：克制的工具界面——系统字体、无渐变、无阴影堆叠，
-   亮/暗由 prefers-color-scheme 决定，颜色只用于表达状态。 */
+/* zedhub 检索页：克制的工具界面——系统字体、无渐变、无阴影堆叠。
+   默认暗色（工具常驻后台，避免夜里整屏发白），右上角可切浅色；
+   颜色只用于表达状态：绿=可操作/命中，琥珀=注意，紫/橙=来源标注。 */
 
-:root {
-  --bg: #fbfbfa;
-  --panel: #ffffff;
-  --ink: #1c1c1a;
-  --ink-soft: #6b6b66;
-  --line: #e2e2de;
-  --line-strong: #c9c9c3;
-  --accent: #2f6f4f;
-  --accent-soft: #eaf2ec;
-  --warn: #8a5a00;
-  --warn-soft: #fdf3e0;
-  --mark: #f7e58a;
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121316;
+  --panel: #191b1e;
+  --panel-2: #1f2226;
+  --panel-hover: #212429;
+  --ink: #e7e6e1;
+  --ink-soft: #9b9b94;
+  --ink-faint: #74746e;
+  --line: #282b2f;
+  --line-strong: #3a3e44;
+  --accent: #7dae8f;
+  --accent-soft: #1e2a23;
+  --warn: #cfa15e;
+  --warn-soft: #2c2519;
+  --mark: #6b5a21;
+  --badge-zed: #a99ce0;
+  --badge-ext: #d09a63;
   --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16171a;
-    --panel: #1d1f22;
-    --ink: #e8e8e4;
-    --ink-soft: #9a9a95;
-    --line: #2c2f34;
-    --line-strong: #3d4148;
-    --accent: #7fb894;
-    --accent-soft: #22302a;
-    --warn: #d8a54a;
-    --warn-soft: #33291a;
-    --mark: #6d5a1f;
-  }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #faf9f7;
+  --panel: #ffffff;
+  --panel-2: #f4f3f0;
+  --panel-hover: #f7f6f3;
+  --ink: #1b1b19;
+  --ink-soft: #6a6a64;
+  --ink-faint: #8a8a83;
+  --line: #e3e2dd;
+  --line-strong: #c9c8c2;
+  --accent: #2f6f4f;
+  --accent-soft: #edf3ee;
+  --warn: #8a5a00;
+  --warn-soft: #fbf1df;
+  --mark: #f5e08a;
+  --badge-zed: #6b5cc5;
+  --badge-ext: #b06a18;
 }
 
 * { box-sizing: border-box; }
@@ -39,18 +51,49 @@ body {
   background: var(--bg);
   color: var(--ink);
   font: 14px/1.55 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
+
+::selection { background: var(--accent-soft); color: var(--ink); }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong); border: 3px solid transparent;
+  background-clip: content-box; border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--ink-faint); }
 
 code { font-family: var(--mono); font-size: 0.92em; }
 
 .bar {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
-  padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px 16px;
+  flex-wrap: wrap;
+  padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
-.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .mark { font-family: var(--mono); font-weight: 600; letter-spacing: -0.01em; }
 .sub { color: var(--ink-soft); font-size: 12.5px; }
-.status { color: var(--ink-soft); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.bar-right {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 8px 12px; flex-wrap: wrap; min-width: 0; margin-left: auto;
+}
+.status { color: var(--ink-soft); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.icon-btn {
+  width: 32px; height: 32px; flex: none; padding: 0; cursor: pointer;
+  display: inline-grid; place-items: center;
+  color: var(--ink-soft); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.icon-btn:hover { color: var(--ink); border-color: var(--line-strong); }
+.icon-btn svg { width: 15px; height: 15px; display: block; }
+.icon-btn .icon-moon { display: none; }
+:root[data-theme="light"] .icon-btn .icon-sun { display: none; }
+:root[data-theme="light"] .icon-btn .icon-moon { display: block; }
 
 .filters {
   display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end;
@@ -67,9 +110,11 @@ input[type="search"], input[type="date"], select {
   border: 1px solid var(--line-strong); border-radius: 6px; padding: 7px 9px;
 }
 input[type="search"] { font-size: 15px; }
-input[type="search"]:focus, input[type="date"]:focus, select:focus {
+input[type="search"]:focus-visible, input[type="date"]:focus-visible, select:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
 }
+input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0.55; cursor: pointer; }
+input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 0.9; }
 
 .notice {
   margin: 12px 20px 0; padding: 9px 12px; border-radius: 6px;
@@ -91,12 +136,15 @@ input[type="search"]:focus, input[type="date"]:focus, select:focus {
   border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
   display: grid; gap: 6px;
 }
-.hit:hover { border-color: var(--line-strong); }
-.hit[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.hit:hover { border-color: var(--line-strong); background: var(--panel-hover); }
+.hit[aria-selected="true"] {
+  border-color: var(--accent); background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .hit .title { font-weight: 550; overflow-wrap: anywhere; }
 .hit .meta { display: flex; flex-wrap: wrap; gap: 6px 10px; color: var(--ink-soft); font-size: 12.5px; }
 .hit .paths { font-family: var(--mono); font-size: 11.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
-mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
+mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 0 1px; }
 
 .badge {
   border: 1px solid var(--line-strong); border-radius: 999px;
@@ -104,8 +152,8 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1
 }
 .badge.agent { color: var(--accent); border-color: var(--accent); }
 .badge.arch { color: var(--warn); border-color: var(--warn); }
-.badge.zed { color: #6b5cc5; border-color: #8d80dd; }
-.badge.external { color: #b06a18; border-color: #d59a55; }
+.badge.zed { color: var(--badge-zed); border-color: var(--badge-zed); }
+.badge.external { color: var(--badge-ext); border-color: var(--badge-ext); }
 .badge.source { color: var(--ink-soft); }
 
 .detail {
@@ -136,7 +184,7 @@ button.action:disabled { opacity: 0.55; cursor: default; }
 
 .foot {
   border-top: 1px solid var(--line); padding: 12px 20px 20px;
-  color: var(--ink-soft); font-size: 12.5px;
+  color: var(--ink-faint); font-size: 12.5px;
 }
 
 /* -- 双栏：左窄（筛选上会话下）右宽 + 横向 tab ------------------------------ */
@@ -170,10 +218,10 @@ button.action:disabled { opacity: 0.55; cursor: default; }
 /* -- 正文全文检索与片段引用样式 ------------------------------------------- */
 .field-header { display: flex; justify-content: space-between; align-items: center; }
 .cb-label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink-soft); cursor: pointer; user-select: none; }
-.cb-label input { cursor: pointer; margin: 0; }
+.cb-label input { cursor: pointer; margin: 0; accent-color: var(--accent); }
 .btn-subtle { font: inherit; font-size: 12px; cursor: pointer; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 4px; padding: 3px 8px; color: var(--ink-soft); }
 .btn-subtle:hover { color: var(--accent); border-color: var(--accent); }
 .btn-subtle:disabled { opacity: 0.5; cursor: default; }
-.index-status-pill { font-size: 12px; color: var(--ink-soft); margin-left: 8px; }
+.index-status-pill { font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
 .snippet-box { margin-top: 4px; background: var(--bg); border-left: 2px solid var(--accent); border-radius: 3px; padding: 4px 6px; font-size: 11.5px; color: var(--ink-soft); line-height: 1.4; overflow-wrap: anywhere; }
 .snippet-box .s-role { font-weight: 600; color: var(--accent); margin-right: 4px; font-family: var(--mono); font-size: 10.5px; }

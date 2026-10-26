@@ -44,6 +44,7 @@ PYTHON_ICON = (
 )
 OUT_DIR = PROJECT_DIR / "bin"
 PRODUCT_NAME = "ZedHub"
+COMPANY_NAME = "ZedHub"
 COPYRIGHT = "Copyright (c) 2026 zedhub"
 
 COMMON_PACKAGES = (
@@ -134,6 +135,7 @@ def _common_args(
         "--assume-yes-for-downloads",
         f"--output-dir={OUT_DIR}",
         f"--output-filename={output_name}",
+        f"--company-name={COMPANY_NAME}",
         f"--product-name={PRODUCT_NAME}",
         f"--file-description={description}",
         f"--file-version={_pe_version(version)}",
@@ -179,7 +181,14 @@ def _build(
         ),
     ]
     cmd.append("--windows-console-mode=" + ("disable" if gui else "force"))
-    cmd.append("--onefile" if onefile else "--standalone")
+    if onefile:
+        cmd.append("--onefile")
+        base_name = Path(output_name).stem
+        cmd.append(
+            f"--onefile-tempdir-spec={{CACHE_DIR}}/{COMPANY_NAME}/onefile/{base_name}/{{VERSION}}"
+        )
+    else:
+        cmd.append("--standalone")
     print("$", " ".join(cmd))
     subprocess.run(cmd, cwd=PROJECT_DIR, check=True)
 

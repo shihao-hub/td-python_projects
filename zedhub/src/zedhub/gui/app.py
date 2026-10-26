@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ctypes
 import gc
+import os
 import sys
 import threading
 import time
@@ -44,7 +45,10 @@ PYTHON_ICON_RELATIVE = Path("docs") / "assets" / "projects" / "python_projects" 
 
 GEOMETRY_DEBOUNCE_S = 0.7
 DAEMON_READY_TIMEOUT_S = 30.0
-BACKGROUND_COLOR = "#0d0f13"
+BACKGROUND_COLOR = "#121316"  # 与页面暗色底一致，避免首帧闪白
+WEBVIEW_DATA_DIRNAME = "webview"  # WebView2 站点数据（含主题偏好）落数据目录
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY = 19
 
 
 def _dev_python_icon() -> Path | None:
@@ -157,6 +161,96 @@ class DaemonHost:
             self.server.should_exit = True
         if self._thread is not None:
             self._thread.join(timeout=10)
+
+
+class ConsoleQuitHook:
+    """控制台 Ctrl+C / Ctrl+Break / 关控制台时优雅退出。
+
+    pywebview 在 Windows 把主线程交给 WinForms 消息循环，Python 的 SIGINT
+    只有在回到解释器字节码时才会派发，默认 Ctrl+C 因此毫无反应。Windows 的
+    ``SetConsoleCtrlHandler`` 回调跑在独立线程，可安全触发窗口销毁与收尾。
+    """
+
+    def __init__(self, on_quit) -> None:
+        self._on_quit = on_quit
+        self._callback = (
+            ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)(self._handle)
+            if sys.platform == "win32"
+            else None
+        )
+        self._installed = False
+
+    def _handle(self, event: int) -> bool:
+        try:
+            self._on_quit()
+        except Exception:  # noqa: BLE001 — 控制台回调里不能抛
+            return False
+        return True
+
+    def install(self) -> bool:
+        if self._callback is None:
+            return False
+        try:
+            self._installed = bool(
+                ctypes.windll.kernel32.SetConsoleCtrlHandler(self._callback, True)
+            )
+        except (AttributeError, OSError):
+            self._installed = False
+        return self._installed
+
+    def uninstall(self) -> None:
+        if not self._installed:
+            return
+        try:
+            ctypes.windll.kernel32.SetConsoleCtrlHandler(self._callback, False)
+        except (AttributeError, OSError):
+            pass
+        self._installed = False
+
+
+class TitleBarTheme:
+    """Windows 标题栏明暗跟随页面主题（DWM immersive dark mode）。
+
+    页面 JS 通过 pywebview 的 ``set_theme`` 桥调用；浏览器打开时没有这个桥，
+    页面主题仍由 localStorage 自行维持。``hwnd`` 每次按窗口标题重找，
+    以适配「关窗销毁 → 托盘重建」的生命周期。
+    """
+
+    def __init__(self, title: str = GUI_TITLE) -> None:
+        self.title = title
+
+    def _hwnd(self) -> int:
+        try:
+            user32 = ctypes.windll.user32
+            user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+            user32.FindWindowW.restype = ctypes.c_void_p
+            return int(user32.FindWindowW(None, self.title) or 0)
+        except (AttributeError, OSError):
+            return 0
+
+    def apply(self, theme: str) -> bool:
+        hwnd = self._hwnd()
+        if not hwnd:
+            return False
+        value = ctypes.c_int(1 if theme != "light" else 0)
+        attrs = (DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY)
+        for attr in attrs:
+            try:
+                result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    ctypes.c_void_p(hwnd),
+                    attr,
+                    ctypes.byref(value),
+                    ctypes.sizeof(value),
+                )
+            except (AttributeError, OSError):
+                return False
+            if result == 0:
+                return True
+        return False
+
+    def set_theme(self, theme: str) -> bool:
+        """pywebview js_api：页面传入 ``dark`` / ``light``。"""
+        return self.apply(theme)
 
 
 class GeometryKeeper:
@@ -272,6 +366,13 @@ def main() -> int:
         _message_box("zedhub-gui 目前仅支持 Windows（依赖 WebView2）。")
         return 2
 
+    # 裁剪 WebView2 独立 GPU / Network 进程（对齐 071 知识库，压低开窗峰值 ~100MB）
+    os.environ.setdefault(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "--disable-gpu --disable-gpu-compositing --disable-software-rasterizer "
+        "--renderer-process-limit=1 --disable-features=NetworkServiceOutOfProcess",
+    )
+
     data_dir()
     log_path = logx.init_logging(runtime_dir() / "gui.log")
     logx.install_excepthook()
@@ -300,6 +401,9 @@ def main() -> int:
         return 1
 
     state = load_window_state()
+    titlebar = TitleBarTheme()
+    webview_data = data_dir() / WEBVIEW_DATA_DIRNAME
+    webview_data.mkdir(parents=True, exist_ok=True)
     quitting = threading.Event()
     show_requested = threading.Event()
     holder: dict[str, object] = {}
@@ -316,11 +420,13 @@ def main() -> int:
             min_size=(MIN_WIDTH, MIN_HEIGHT),
             background_color=BACKGROUND_COLOR,
             text_select=True,
+            js_api=titlebar,
         )
         keeper = GeometryKeeper(window, state)
         keeper.bind()
         holder["window"] = window
         holder["keeper"] = keeper
+        window.events.shown += lambda *args: titlebar.apply("dark")
         window.events.closed += lambda *args: _on_closed()
         return window
 
@@ -330,7 +436,14 @@ def main() -> int:
             keeper.flush()
         holder["window"] = None
         holder["keeper"] = None
-        gc.collect()  # 对齐 go-wails 关窗后的 GC / FreeOSMemory
+        gc.collect()  # 对齐 go-wails 关窗后的 GC
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.psapi.EmptyWorkingSet(
+                    ctypes.windll.kernel32.GetCurrentProcess()
+                )
+            except OSError:
+                pass
 
     def _show_window() -> None:
         window = holder.get("window")
@@ -364,10 +477,17 @@ def main() -> int:
             if tray is not None:
                 holder["tray"] = tray
 
+    console_quit = ConsoleQuitHook(_quit)
+    console_quit.install()
     try:
         while not quitting.is_set():
             _build_window()
-            webview.start(func=_boot_tray, icon=str(app_icon()))
+            webview.start(
+                func=_boot_tray,
+                icon=str(app_icon()),
+                private_mode=False,
+                storage_path=str(webview_data),
+            )
             if quitting.is_set():
                 break
             if holder.get("tray") is None:
@@ -376,6 +496,7 @@ def main() -> int:
             show_requested.wait()
             show_requested.clear()
     finally:
+        console_quit.uninstall()
         keeper = holder.get("keeper")
         if isinstance(keeper, GeometryKeeper):
             keeper.flush()
