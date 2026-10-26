@@ -32,3 +32,6 @@ dist/
 
 # 本地 SQLite 数据库（运行时投影，不入库）
 *.db
+
+# Windows 下 `>nul` 重定向误生成的占位文件
+nul
