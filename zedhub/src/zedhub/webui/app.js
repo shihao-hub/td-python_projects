@@ -17,6 +17,7 @@ const el = {
   archived: document.getElementById("archived"),
   since: document.getElementById("since"),
   until: document.getElementById("until"),
+  skill: document.getElementById("skill"),
   list: document.getElementById("list"),
   detail: document.getElementById("detail"),
   status: document.getElementById("status"),
@@ -253,6 +254,7 @@ function restoreFromUrl() {
   el.until.value = p.get("until") || "";
   setAgentValue(p.get("agent") || "", p.get("scope") || "");
   setProjectValue(p.get("project") || "");
+  if (el.skill) el.skill.value = p.get("skill") || "";
 }
 
 function readState() {
@@ -266,6 +268,7 @@ function readState() {
     archived: el.archived.value,
     since: el.since.value,
     until: el.until.value,
+    skill: el.skill ? el.skill.value : "",
     scope: choice.scope,
   };
 }
@@ -281,6 +284,7 @@ function syncUrl(state) {
   if (state.archived && state.archived !== "no") p.set("archived", state.archived);
   if (state.since) p.set("since", state.since);
   if (state.until) p.set("until", state.until);
+  if (state.skill) p.set("skill", state.skill);
   const qs = p.toString();
   history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
 }
@@ -455,6 +459,25 @@ async function loadOptions() {
   } catch (e) {
     showNotice(`读取全部会话筛选项失败：${e.message}`);
   }
+
+  if (el.skill) {
+    try {
+      const sBody = await api(`${API}/skills`);
+      el.skill.replaceChildren();
+      const optAll = document.createElement("option");
+      optAll.value = "";
+      optAll.textContent = "全部 Skill";
+      el.skill.append(optAll);
+      for (const item of sBody.data || []) {
+        const opt = document.createElement("option");
+        opt.value = item.name;
+        const tag = item.exists_on_disk ? "" : " [已失效]";
+        opt.textContent = `${item.name} (${item.count})${tag}`;
+        el.skill.append(opt);
+      }
+    } catch (_) {}
+  }
+
   restoreFromUrl();
 }
 
@@ -477,6 +500,7 @@ async function runSearch() {
       archived: state.archived,
       since: state.since,
       until: state.until,
+      skill: state.skill || undefined,
       limit: 200,
       scope: state.scope,
     });
@@ -534,6 +558,32 @@ function renderHit(hit, tokens) {
     meta.append(m);
   }
   btn.append(meta);
+
+  if (hit.skills && hit.skills.length) {
+    const count = hit.skills.length;
+    const skillsRow = document.createElement("div");
+    skillsRow.className = "skills-row";
+
+    const sBtn = document.createElement("button");
+    sBtn.type = "button";
+    sBtn.className = "badge-skill-pill";
+    sBtn.innerHTML = `🛠️ <strong>${count}</strong> 个 Skill: <span class="skill-names-preview">${hit.skills.slice(0, 2).join(", ")}${count > 2 ? " 等" : ""}</span>`;
+    sBtn.title = "点击直接在右侧打开【技能】面板查看调用详情与证据";
+    sBtn.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      for (const other of el.list.querySelectorAll(".hit")) other.setAttribute("aria-selected", "false");
+      btn.setAttribute("aria-selected", "true");
+      openHit(hit, "技能").catch((e) => {
+        el.detail.replaceChildren();
+        const p = document.createElement("p");
+        p.className = "placeholder";
+        p.textContent = `加载详情失败：${e.message}`;
+        el.detail.append(p);
+      });
+    });
+    skillsRow.append(sBtn);
+    btn.append(skillsRow);
+  }
 
   if (hit.projects && hit.projects.length) {
     const paths = document.createElement("div");
@@ -610,7 +660,7 @@ function mdToHtml(src) {
     .replace(/`([^`]+)`/g, "<code>$1</code>");
 }
 
-function renderDetail(hit, rows, actions) {
+function renderDetail(hit, rows, actions, activeTab = "元数据") {
   el.detail.replaceChildren();
   const h2 = document.createElement("h2");
   h2.textContent = hit.title || "(无标题)";
@@ -620,19 +670,31 @@ function renderDetail(hit, rows, actions) {
   tabs.className = "tabs";
   tabs.setAttribute("role", "tablist");
   const panes = {};
-  for (const name of ["元数据", "轨迹"]) {
+
+  const switchTab = (name) => {
+    for (const n of Object.keys(panes)) panes[n].hidden = n !== name;
+    for (const o of tabs.querySelectorAll(".tab")) {
+      o.setAttribute("aria-selected", String(o.dataset.tabName === name));
+    }
+    if (name === "技能" && !panes["技能"]._loaded) {
+      panes["技能"]._loaded = true;
+      loadSessionSkills(panes["技能"], hit);
+    }
+  };
+
+  for (const name of ["元数据", "轨迹", "技能"]) {
     const b = document.createElement("button");
-    b.type = "button"; b.className = "tab"; b.textContent = name;
+    b.type = "button";
+    b.className = "tab";
+    b.dataset.tabName = name;
+    b.textContent = name;
     b.setAttribute("role", "tab");
-    b.setAttribute("aria-selected", name === "元数据" ? "true" : "false");
+    b.setAttribute("aria-selected", name === activeTab ? "true" : "false");
     const pane = document.createElement("div");
     pane.className = "tabpane";
-    pane.hidden = name !== "元数据";
+    pane.hidden = name !== activeTab;
     panes[name] = pane;
-    b.addEventListener("click", () => {
-      for (const n of Object.keys(panes)) panes[n].hidden = n !== name;
-      for (const o of tabs.querySelectorAll(".tab")) o.setAttribute("aria-selected", String(o === b));
-    });
+    b.addEventListener("click", () => switchTab(name));
     tabs.append(b);
   }
   el.detail.append(tabs);
@@ -648,19 +710,136 @@ function renderDetail(hit, rows, actions) {
     dl.append(dt, dd);
   }
   meta.append(dl);
+
   if (actions && actions.length) {
     const bar = document.createElement("div");
     bar.className = "toolbar";
     for (const a of actions) bar.append(a);
     meta.append(bar);
   }
+
   const tmeta = document.createElement("p");
   tmeta.className = "placeholder";
   tmeta.textContent = "点「查看轨迹」加载；加载后显示在这里。";
   panes["轨迹"].append(tmeta);
-  el.detail.append(meta, panes["轨迹"]);
+
+  const smeta = document.createElement("p");
+  smeta.className = "placeholder";
+  smeta.textContent = "切换到「技能」Tab 自动加载调用证据。";
+  panes["技能"].append(smeta);
+
+  el.detail.append(meta, panes["轨迹"], panes["技能"]);
   el.detail._panes = panes;
+  el.detail._switchTab = switchTab;
+
+  if (activeTab === "技能") {
+    switchTab("技能");
+  }
+
   return el.detail;
+}
+
+async function loadSessionSkills(pane, hit) {
+  pane.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "placeholder";
+  loading.textContent = "技能调用证据加载中…";
+  pane.append(loading);
+
+  const sid = hit.session_id || hit.thread_id;
+  let agentSource = hit.source_id || "";
+  const aid = (hit.agent_id || "").toLowerCase();
+  if (!agentSource) {
+    if (aid.includes("codex")) agentSource = "codex";
+    else if (aid.includes("claude")) agentSource = "claude-code";
+    else if (aid.includes("pi")) agentSource = "pi";
+    else if (aid.includes("antigravity")) agentSource = "antigravity";
+    else agentSource = "opencode";
+  }
+
+  try {
+    const body = await api(`${API}/sessions/${encodeURIComponent(sid)}/skills`, { source: agentSource });
+    const data = body.data || {};
+    const skList = data.skills || [];
+    const invocations = data.invocations || [];
+    pane.replaceChildren();
+
+    const summary = document.createElement("div");
+    summary.style.margin = "4px 0 14px";
+    summary.innerHTML = `<span style="font-size: 13.5px; font-weight: 600;">识别到 ${skList.length} 个 Skill</span> <span style="color: var(--ink-soft); font-size: 12px;">（共 ${invocations.length} 次触发/激活留痕）</span>`;
+    pane.append(summary);
+
+    if (!invocations.length) {
+      const emptyP = document.createElement("p");
+      emptyP.className = "placeholder";
+      emptyP.textContent = "该会话未检测到任何明确的 Skill 调用记录。";
+      pane.append(emptyP);
+      return;
+    }
+
+    const timeline = document.createElement("div");
+    timeline.className = "skills-timeline";
+    for (const inv of invocations) {
+      const card = document.createElement("div");
+      card.className = "skill-card";
+
+      const head = document.createElement("div");
+      head.className = "skill-card-head";
+
+      const leftHead = document.createElement("div");
+      leftHead.style.display = "flex";
+      leftHead.style.alignItems = "center";
+      leftHead.style.gap = "8px";
+
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "skill-card-name";
+      nameSpan.textContent = inv.name;
+
+      const findBtn = document.createElement("button");
+      findBtn.type = "button";
+      findBtn.className = "btn-subtle";
+      findBtn.style.padding = "1px 6px";
+      findBtn.style.fontSize = "11px";
+      findBtn.textContent = "反查会话";
+      findBtn.title = `查找所有调用过 ${inv.name} 的会话`;
+      findBtn.addEventListener("click", () => {
+        el.q.value = `skill:${inv.name}`;
+        if (el.skill) el.skill.value = "";
+        runSearch();
+      });
+
+      leftHead.append(nameSpan, findBtn);
+
+      const tag = document.createElement("span");
+      tag.className = `skill-status-tag ${inv.exists_on_disk ? "online" : "offline"}`;
+      tag.textContent = inv.exists_on_disk ? "🟢 本机就绪" : "⚪ 历史残留（本地已消失）";
+
+      head.append(leftHead, tag);
+
+      const meta = document.createElement("div");
+      meta.className = "skill-card-meta";
+      const trigMap = {
+        "skill_doc_read": "📖 指令阅读 (SKILL.md)",
+        "user_command": "⚡ 用户命令触发",
+        "tool_call": "🛠️ 工具调用",
+      };
+      meta.innerHTML = `<span>触发方式: ${trigMap[inv.trigger_type] || inv.trigger_type}</span><span>时间: ${shortTime(inv.invoked_at)}</span>`;
+
+      const detail = document.createElement("div");
+      detail.className = "skill-card-detail";
+      detail.textContent = inv.detail;
+
+      card.append(head, meta, detail);
+      timeline.append(card);
+    }
+    pane.append(timeline);
+  } catch (err) {
+    pane.replaceChildren();
+    const errP = document.createElement("p");
+    errP.className = "placeholder";
+    errP.textContent = `加载技能调用记录失败：${err.message}`;
+    pane.append(errP);
+  }
 }
 
 function actionButton(label, onClick) {
@@ -672,7 +851,7 @@ function actionButton(label, onClick) {
   return b;
 }
 
-async function openHit(hit) {
+async function openHit(hit, targetTab = "元数据") {
   const actions = [];
   const rows = [
     ["类型", hit.kind === "zed_thread" ? "Zed 索引线程" : "OpenCode 会话（未进 Zed 索引）"],
@@ -719,7 +898,7 @@ async function openHit(hit) {
       renderDetail(hit, rows.concat([
         ["目录", s.directory],
         ["模型", s.model ? `${s.model.provider || "?"}/${s.model.model_id || "?"}` : "-"],
-      ]), actions);
+      ]), actions, targetTab);
     }));
   }
 
@@ -741,7 +920,8 @@ async function openHit(hit) {
       }
     }));
   }
-  renderDetail(hit, rows, actions);
+
+  renderDetail(hit, rows, actions, targetTab);
 
   if (hit.kind === "zed_thread" && hit.thread_id) {
     const body = await api(`${API}/threads/${encodeURIComponent(hit.thread_id)}`);
@@ -760,10 +940,9 @@ async function openHit(hit) {
       hasContentSupport
         ? ["正文", `点上方「加载正文」（${agentSource} 对话气泡）`]
         : ["正文", `该会话属 ${hit.agent_id}，无结构化正文源（仅 Zed 索引可见）`],
-    ], actions);
+    ], actions, targetTab);
   }
 }
-
 function renderMessages(content, hit) {
   const wrap = document.createElement("div");
   wrap.className = "messages";
@@ -921,7 +1100,7 @@ el.form.addEventListener("submit", (e) => {
 });
 el.agent.addEventListener("change", () => runSearch().catch(() => {}));
 
-for (const node of [el.project, el.archived, el.since, el.until]) {
+for (const node of [el.project, el.archived, el.since, el.until, el.skill].filter(Boolean)) {
   node.addEventListener("change", () => runSearch().catch(() => {}));
 }
 document.addEventListener("keydown", (e) => {

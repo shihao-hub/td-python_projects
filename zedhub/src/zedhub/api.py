@@ -24,6 +24,7 @@ from .core.errors import (
     SnapshotError,
     ZedhubError,
 )
+from .core.metadata_cache import MetadataCacheService
 from .core.model import Overview, ProjectStat, Session, SessionContent, Thread
 from .core.model import SearchRequest, SearchResult, SessionScope
 from .core.opencode_repo import OpencodeDb
@@ -205,14 +206,17 @@ def _sources(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
 
 
 def _zed_session_map(ctx: CallContext) -> dict[str, str] | None:
-    """Zed 索引 session_id → thread_id；Zed 缺失时返回 None（关联标记降级，
-    不伪造，AC-3）；schema 异常照常传播（真实数据问题应暴露）。"""
+    """Zed 索引 session_id → thread_id；优先走缓存，异常时降级快照。"""
     try:
-        with open_snapshot(ctx.zed_db) as snap:
-            with ZedDb(snap) as db:
-                return {t.session_id: t.id for t in db.load_threads() if t.session_id}
-    except SnapshotError:
-        return None
+        threads = MetadataCacheService().get_threads(ctx.zed_db)
+        return {t.session_id: t.id for t in threads if t.session_id}
+    except Exception:
+        try:
+            with open_snapshot(ctx.zed_db) as snap:
+                with ZedDb(snap) as db:
+                    return {t.session_id: t.id for t in db.load_threads() if t.session_id}
+        except SnapshotError:
+            return None
 
 
 def _attach_zed_link(sessions: list[Session], ctx: CallContext) -> list[dict]:
@@ -231,25 +235,42 @@ def _sessions_list(params: dict, ctx: CallContext, progress=noop_progress) -> An
         limit=_opt_int(params, "limit"),
     )
     if source_id == "all":
-        sessions = []
-        for src in list_source_infos():
-            if Capability.SESSIONS not in src.capabilities:
-                continue
-            try:
-                source_request = request.model_copy(update={"limit": None})
-                sessions.extend(
-                    get_source(src.source_id).list_sessions(
-                        source_request, db=ctx.opencode_db
+        sessions: list[Session] = []
+        try:
+            cache = MetadataCacheService()
+            all_cached = cache.get_sessions(opencode_db=ctx.opencode_db)
+            for s in all_cached:
+                if request.project and request.project.casefold() not in (s.directory or "").casefold():
+                    continue
+                if request.agent and s.agent != request.agent:
+                    continue
+                if request.archived == "only" and not s.archived:
+                    continue
+                if request.archived == "no" and s.archived:
+                    continue
+                sessions.append(s)
+            if request.limit is not None and request.limit > 0:
+                sessions = sessions[:request.limit]
+        except Exception:
+            sessions = []
+            for src in list_source_infos():
+                if Capability.SESSIONS not in src.capabilities:
+                    continue
+                try:
+                    source_request = request.model_copy(update={"limit": None})
+                    sessions.extend(
+                        get_source(src.source_id).list_sessions(
+                            source_request, db=ctx.opencode_db
+                        )
                     )
-                )
-            except ZedhubError:
-                continue
-        sessions.sort(
-            key=lambda s: s.updated_at or s.created_at or datetime.min.replace(tzinfo=timezone.utc),
-            reverse=True,
-        )
-        if request.limit is not None and request.limit > 0:
-            sessions = sessions[:request.limit]
+                except ZedhubError:
+                    continue
+            sessions.sort(
+                key=lambda s: s.updated_at or s.created_at or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )
+            if request.limit is not None and request.limit > 0:
+                sessions = sessions[:request.limit]
     else:
         src = get_source(source_id)
         sessions = src.list_sessions(request, db=ctx.opencode_db)
@@ -328,6 +349,39 @@ def _trajectory(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     return load_trajectory(source=source, files=files, limit=min(limit, 2000))
 
 
+def _sessions_skills(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
+    """单个会话中识别到的 Skills 调用及调用证据明细。"""
+    from .core.skill_extractor import extract_session_skills
+
+    sid = _opt_str(params, "session_id")
+    if sid is None:
+        raise InvalidParamsError("param 'session_id' is required")
+    source = _opt_str(params, "source") or ""
+    skills, invocations = extract_session_skills(
+        source, sid, opencode_db=ctx.opencode_db
+    )
+    return {
+        "session_id": sid,
+        "source": source,
+        "skills": skills,
+        "invocations": [inv.to_dict() for inv in invocations],
+    }
+
+
+def _skills_list(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
+    """全局识别到的 Skills 汇总排行榜。"""
+    limit = _opt_int(params, "limit")
+    cache = MetadataCacheService()
+    try:
+        cache.get_sessions(opencode_db=ctx.opencode_db)
+    except Exception:
+        pass
+    items = cache.get_skills_summary()
+    if limit is not None and limit > 0:
+        items = items[:limit]
+    return items
+
+
 # -- 会话元数据检索 ---------------------------------------------------------------
 
 # API 默认返回条数（limit=0 表示不限制，由调用方显式指定）
@@ -349,7 +403,7 @@ def dump_search(result: SearchResult) -> dict:
 
 
 def _search(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
-    """会话检索：元数据（主表 Zed）+ 可选正文全文检索（FTS5）。"""
+    """会话检索：元数据（主表 Zed）+ 可选正文全文检索（FTS5）。优先命中增量元数据缓存。"""
     from .core.search import SearchService
 
     limit = _opt_int(params, "limit")
@@ -357,6 +411,7 @@ def _search(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
         q=_opt_str(params, "q"),
         agent=_opt_str(params, "agent"),
         project=_opt_str(params, "project"),
+        skill=_opt_str(params, "skill"),
         archived=_archived(params),
         since=_opt_date(params, "since"),
         until=_opt_date(params, "until"),
@@ -366,23 +421,30 @@ def _search(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
         content=_opt_bool(params, "content") or False,
     )
 
-    with open_snapshot(ctx.zed_db) as snap:
-        with ZedDb(snap) as db:
-            threads = db.load_threads()
+    cache = MetadataCacheService()
+    try:
+        threads = cache.get_threads(ctx.zed_db)
+    except Exception:
+        with open_snapshot(ctx.zed_db) as snap:
+            with ZedDb(snap) as db:
+                threads = db.load_threads()
 
     sessions: list[Session] = []
     degraded: list[str] = []
-    sources = session_source_ids()
-    for source_id in sources:
-        try:
-            source = get_source(source_id)
-            sessions.extend(
-                source.list_sessions(
-                    SessionListRequest(archived="all"), db=ctx.opencode_db
+    try:
+        sessions = cache.get_sessions(opencode_db=ctx.opencode_db)
+    except Exception as exc:
+        degraded.append(f"会话缓存同步异常，已降级实时扫描: {exc}")
+        for source_id in session_source_ids():
+            try:
+                source = get_source(source_id)
+                sessions.extend(
+                    source.list_sessions(
+                        SessionListRequest(archived="all"), db=ctx.opencode_db
+                    )
                 )
-            )
-        except ZedhubError as exc:
-            degraded.append(f"{source_id} 数据源不可用：{exc}")
+            except ZedhubError as e:
+                degraded.append(f"{source_id} 数据源不可用：{e}")
 
     result = SearchService(threads=threads, sessions=sessions).search(request)
     result.degraded = degraded
@@ -408,44 +470,64 @@ def _index_build(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
         opencode_db=ctx.opencode_db,
         progress=progress,
     )
+    # 同步刷新元数据缓存
+    try:
+        MetadataCacheService().invalidate()
+    except Exception:
+        pass
     return stats.model_dump(mode="json")
 
 
 def _sessions_link(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     from .core.linking import run_link
 
+    source = _opt_str(params, "source") or "opencode"
     project = _opt_str(params, "project")
     if project is None:
         raise InvalidParamsError("param 'project' is required")
-    target = params.get("target")
-    if target is not None and not isinstance(target, str):
-        raise InvalidParamsError("param 'target' must be a string")
-    return run_link(
+    exact = _opt_bool(params, "exact")
+    target = _opt_str(params, "target")
+    all_dirs = _opt_bool(params, "all_dirs")
+    apply = _opt_bool(params, "apply")
+    include_subagents = _opt_bool(params, "include_subagents")
+
+    report = run_link(
+        source=source,
         project=project,
-        source=_opt_str(params, "source") or "opencode",
-        all_dirs=bool(params.get("all_dirs")),
+        exact=exact,
         target=target,
-        include_subagents=bool(params.get("include_subagents")),
-        exact=bool(params.get("exact")),
-        apply=bool(params.get("apply")),
+        all_dirs=all_dirs,
+        apply=apply,
+        include_subagents=include_subagents,
         zed_db=ctx.zed_db,
         opencode_db=ctx.opencode_db,
         progress=progress,
     )
+    # 补登成功写库后刷新元数据缓存
+    if apply:
+        try:
+            MetadataCacheService().invalidate()
+        except Exception:
+            pass
+    return report.model_dump(mode="json")
 
 
 def _archive_export(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     from .core.archive import export_archive
 
     project = _opt_str(params, "project")
+    if project is None:
+        raise InvalidParamsError("param 'project' is required")
     output = _opt_str(params, "output")
-    if project is None or output is None:
-        raise InvalidParamsError("params 'project' and 'output' are required")
+    if output is None:
+        raise InvalidParamsError("param 'output' is required")
+    include_archived = _opt_bool(params, "include_archived")
+    exact = _opt_bool(params, "exact")
+    source = _opt_str(params, "source") or "opencode"
+
     return export_archive(
-        project=project, output=output,
-        include_archived=bool(params.get("include_archived")),
-        exact=bool(params.get("exact")),
-        source=_opt_str(params, "source") or "opencode",
+        project=project, output=output, include_archived=include_archived,
+        exact=exact, source=source,
         zed_db=ctx.zed_db, opencode_db=ctx.opencode_db,
         progress=progress,
     )
@@ -461,17 +543,26 @@ def _archive_inspect(params: dict, ctx: CallContext, progress=noop_progress) -> 
 
 
 def _archive_import(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
-    from .core.migration import import_archive
+    from .core.archive import import_archive
 
     file = _opt_str(params, "file")
+    if file is None:
+        raise InvalidParamsError("param 'file' is required")
     target = _opt_str(params, "target")
-    if file is None or target is None:
-        raise InvalidParamsError("params 'file' and 'target' are required")
-    return import_archive(
+    if target is None:
+        raise InvalidParamsError("param 'target' is required")
+
+    res = import_archive(
         file=file, target=target, apply=bool(params.get("apply")),
         zed_db=ctx.zed_db, opencode_db=ctx.opencode_db,
         progress=progress,
     )
+    if bool(params.get("apply")):
+        try:
+            MetadataCacheService().invalidate()
+        except Exception:
+            pass
+    return res
 
 
 # -- 注册表 -----------------------------------------------------------------------
@@ -490,6 +581,8 @@ METHODS: dict[str, Callable[..., Any]] = {
     "index.build": _index_build,
     "stats.effort": _stats_effort,
     "trajectory.show": _trajectory,
+    "sessions.skills": _sessions_skills,
+    "skills.list": _skills_list,
     "sessions.link": _sessions_link,
     "archive.export": _archive_export,
     "archive.inspect": _archive_inspect,

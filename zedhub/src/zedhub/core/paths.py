@@ -37,3 +37,8 @@ def data_subdir(name: str) -> Path:
 def index_db_path() -> Path:
     """会话正文 FTS5 索引库文件绝对路径。"""
     return data_subdir("index") / "content_search.db"
+
+
+def metadata_cache_db_path() -> Path:
+    """会话与线程元数据增量缓存库绝对路径。"""
+    return data_subdir("index") / "metadata_cache.db"

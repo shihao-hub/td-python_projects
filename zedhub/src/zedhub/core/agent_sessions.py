@@ -1,4 +1,4 @@
-"""三 agent 源（claude-code/codex/antigravity）会话元数据扫描（sessions link）。
+"""三 agent 源（claude-code/codex/antigravity/pi）会话元数据扫描（sessions link）。
 
 与 agent_paths.py 的整文件定位不同：本模块做**浅层元数据解析**——每会话
 只读头部若干行与尾部残段，提取目录锚点 / 标题 / 时间戳，供补登
@@ -160,58 +160,114 @@ def _dedupe_records(records: list[AgentSessionRecord]) -> list[AgentSessionRecor
     return [merged[sid] for sid in sorted(merged)]
 
 
+def parse_claude_file(f: Path) -> AgentSessionRecord:
+    """解析单个 Claude Code session jsonl 文件。"""
+    sid = f.stem
+    first_ts: str | None = None
+    cwd: str | None = None
+    title: str | None = None
+    with f.open(encoding="utf-8", errors="replace") as fh:
+        for i, line in enumerate(fh):
+            if i >= _HEAD_LINES:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if first_ts is None and isinstance(obj.get("timestamp"), str):
+                first_ts = obj["timestamp"]
+            if cwd is None and isinstance(obj.get("cwd"), str) and obj["cwd"]:
+                cwd = obj["cwd"]
+            if (
+                title is None
+                and obj.get("type") == "user"
+                and not obj.get("isSidechain")
+                and not obj.get("isMeta")
+            ):
+                title = _claude_user_text(obj.get("message"))
+            if first_ts and cwd and title:
+                break
+    created = iso_z_to_zed_ts(first_ts or "")
+    updated = iso_z_to_zed_ts(_tail_timestamp(f) or "") or created
+    if created is None:
+        created = mtime_ns_to_zed_ts(f.stat().st_mtime_ns)
+        updated = updated or created
+    return AgentSessionRecord(
+        session_id=sid,
+        directory=os.path.normpath(cwd) if cwd else "",
+        title=title or "",
+        time_created=created,
+        time_updated=updated or created,
+    )
+
+
 def _scan_claude(home: Path | None) -> list[AgentSessionRecord]:
     base = agent_data_root("claude-code", home=home) / "projects"
     records: list[AgentSessionRecord] = []
     if not base.is_dir():
         return records
     for f in sorted(base.glob("*/*.jsonl")):
-        sid = f.stem
-        first_ts: str | None = None
-        cwd: str | None = None
-        title: str | None = None
-        with f.open(encoding="utf-8", errors="replace") as fh:
-            for i, line in enumerate(fh):
-                if i >= _HEAD_LINES:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(obj, dict):
-                    continue
-                if first_ts is None and isinstance(obj.get("timestamp"), str):
-                    first_ts = obj["timestamp"]
-                if cwd is None and isinstance(obj.get("cwd"), str) and obj["cwd"]:
-                    cwd = obj["cwd"]
-                if (
-                    title is None
-                    and obj.get("type") == "user"
-                    and not obj.get("isSidechain")
-                    and not obj.get("isMeta")
-                ):
-                    title = _claude_user_text(obj.get("message"))
-                if first_ts and cwd and title:
-                    break
-        created = iso_z_to_zed_ts(first_ts or "")
-        updated = iso_z_to_zed_ts(_tail_timestamp(f) or "") or created
-        if created is None:
-            # 头部无时间戳（罕见）：mtime 兜底，保记录不丢
-            created = mtime_ns_to_zed_ts(f.stat().st_mtime_ns)
-            updated = updated or created
-        records.append(
-            AgentSessionRecord(
-                session_id=sid,
-                directory=os.path.normpath(cwd) if cwd else "",
-                title=title or "",
-                time_created=created,
-                time_updated=updated or created,
-            )
-        )
+        records.append(parse_claude_file(f))
     return _dedupe_records(records)
+
+
+def parse_codex_file(f: Path) -> AgentSessionRecord | None:
+    """解析单个 Codex session jsonl 文件。"""
+    sid: str | None = None
+    first_ts: str | None = None
+    cwd: str | None = None
+    title: str | None = None
+    with f.open(encoding="utf-8", errors="replace") as fh:
+        for i, line in enumerate(fh):
+            if i >= _HEAD_LINES:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            payload = obj.get("payload")
+            payload = payload if isinstance(payload, dict) else {}
+            if obj.get("type") == "session_meta":
+                sid = sid or payload.get("session_id") or payload.get("id")
+                cwd = cwd or payload.get("cwd")
+                first_ts = first_ts or obj.get("timestamp") or payload.get("timestamp")
+            elif (
+                title is None
+                and obj.get("type") == "response_item"
+                and payload.get("type") == "message"
+                and payload.get("role") == "user"
+            ):
+                title = _codex_user_text(payload)
+            if sid and cwd and title:
+                break
+    if not sid:
+        stem = f.stem
+        if len(stem) >= 36 and stem[-37] == "-":
+            sid = stem[-36:]
+        else:
+            return None
+    created = iso_z_to_zed_ts(first_ts or "")
+    updated = iso_z_to_zed_ts(_tail_timestamp(f) or "") or created
+    if created is None:
+        created = mtime_ns_to_zed_ts(f.stat().st_mtime_ns)
+        updated = updated or created
+    return AgentSessionRecord(
+        session_id=sid,
+        directory=os.path.normpath(cwd) if cwd else "",
+        title=title or "",
+        time_created=created,
+        time_updated=updated or created,
+    )
 
 
 def _scan_codex(home: Path | None) -> list[AgentSessionRecord]:
@@ -220,11 +276,69 @@ def _scan_codex(home: Path | None) -> list[AgentSessionRecord]:
     if not base.is_dir():
         return records
     for f in sorted(base.rglob("*.jsonl")):
-        sid: str | None = None
-        first_ts: str | None = None
-        cwd: str | None = None
-        title: str | None = None
-        with f.open(encoding="utf-8", errors="replace") as fh:
+        rec = parse_codex_file(f)
+        if rec is not None:
+            records.append(rec)
+    return _dedupe_records(records)
+
+
+def parse_antigravity_session(
+    sid: str,
+    *,
+    conv: Path | None = None,
+    brain: Path | None = None,
+    anno_dir: Path | None = None,
+) -> AgentSessionRecord | None:
+    """解析单个 Antigravity 会话元数据。"""
+    meta = conv / f"{sid}.meta" if conv and conv.is_dir() else None
+    db = conv / f"{sid}.db" if conv and conv.is_dir() else None
+    tr = (
+        brain / sid / ".system_generated" / "logs" / "transcript.jsonl"
+        if brain and brain.is_dir()
+        else None
+    )
+    anno = anno_dir / f"{sid}.pbtxt" if anno_dir and anno_dir.is_dir() else None
+
+    # 过滤既无 transcript 又无 annotations 且 db 较小（48KB 以下，无 steps 记录）的僵尸会话
+    if not (tr and tr.is_file()) and not (anno and anno.is_file()):
+        if db and db.is_file():
+            try:
+                if db.stat().st_size <= 49152:
+                    return None
+            except OSError:
+                return None
+        else:
+            return None
+
+    cwd: str | None = None
+    if meta and meta.is_file():
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        raw = data.get("cwd") if isinstance(data, dict) else None
+        cwd = raw if isinstance(raw, str) and raw else None
+
+    title = ""
+    archived = False
+    if anno and anno.is_file():
+        try:
+            text = anno.read_text(encoding="utf-8", errors="replace")
+            m = re.search(r'title:\s*"([^"]*)"', text)
+            if not m:
+                m = re.search(r'title:\s*([^\s\r\n]+)', text)
+            if m and m.group(1):
+                title = _clean_title(m.group(1)) or ""
+            if "archived:true" in text.replace(" ", ""):
+                archived = True
+        except OSError:
+            pass
+
+    first_ts: str | None = None
+    last_ts: str | None = None
+
+    if tr and tr.is_file():
+        with tr.open(encoding="utf-8", errors="replace") as fh:
             for i, line in enumerate(fh):
                 if i >= _HEAD_LINES:
                     break
@@ -237,43 +351,59 @@ def _scan_codex(home: Path | None) -> list[AgentSessionRecord]:
                     continue
                 if not isinstance(obj, dict):
                     continue
-                payload = obj.get("payload")
-                payload = payload if isinstance(payload, dict) else {}
-                if obj.get("type") == "session_meta":
-                    sid = sid or payload.get("session_id") or payload.get("id")
-                    cwd = cwd or payload.get("cwd")
-                    first_ts = first_ts or obj.get("timestamp") or payload.get("timestamp")
-                elif (
-                    title is None
-                    and obj.get("type") == "response_item"
-                    and payload.get("type") == "message"
-                    and payload.get("role") == "user"
-                ):
-                    title = _codex_user_text(payload)
-                if sid and cwd and title:
+                if first_ts is None and isinstance(obj.get("created_at"), str):
+                    first_ts = obj["created_at"]
+                if not title and obj.get("type") == "USER_INPUT":
+                    raw_content = obj.get("content", "")
+                    req = _extract_user_request(raw_content)
+                    if req:
+                        title = _clean_title(req) or ""
+                if not cwd:
+                    for tc in obj.get("tool_calls") or []:
+                        args = tc.get("args") or {}
+                        if isinstance(args, dict) and args.get("Cwd"):
+                            c = str(args["Cwd"]).strip('"')
+                            if Path(c).is_dir():
+                                cwd = c
+                                break
+                    if not cwd:
+                        content = obj.get("content", "")
+                        for l in content.splitlines():
+                            if "Command Working Directory:" in l:
+                                c = l.split("Command Working Directory:")[1].strip()
+                                if Path(c).is_dir():
+                                    cwd = c
+                                    break
+                            elif l.startswith("- ") and (":\\" in l or ":/" in l):
+                                c = l[2:].strip()
+                                if Path(c).is_dir():
+                                    cwd = c
+                                    break
+                if first_ts and title and cwd:
                     break
-        if not sid:
-            # 首行残缺时从文件名尾段兜底（rollout-<ts>-<uuid>.jsonl）
-            stem = f.stem
-            if len(stem) >= 36 and stem[-37] == "-":
-                sid = stem[-36:]
-            else:
-                continue  # 无法锚定 session_id 的文件不猜
-        created = iso_z_to_zed_ts(first_ts or "")
-        updated = iso_z_to_zed_ts(_tail_timestamp(f) or "") or created
-        if created is None:
-            created = mtime_ns_to_zed_ts(f.stat().st_mtime_ns)
+        last_ts = _tail_timestamp(tr)
+
+    created = iso_z_to_zed_ts(first_ts or "")
+    updated = iso_z_to_zed_ts(last_ts or "") or created
+
+    if created is None:
+        mtime_source = tr if (tr and tr.is_file()) else db
+        if not mtime_source or not mtime_source.is_file():
+            mtime_source = anno
+        if mtime_source and mtime_source.is_file():
+            created = mtime_ns_to_zed_ts(mtime_source.stat().st_mtime_ns)
             updated = updated or created
-        records.append(
-            AgentSessionRecord(
-                session_id=sid,
-                directory=os.path.normpath(cwd) if cwd else "",
-                title=title or "",
-                time_created=created,
-                time_updated=updated or created,
-            )
-        )
-    return _dedupe_records(records)
+        else:
+            return None
+
+    return AgentSessionRecord(
+        session_id=sid,
+        directory=os.path.normpath(cwd) if cwd else "",
+        title=title or "",
+        time_created=created or "",
+        time_updated=updated or created or "",
+        archived=archived,
+    )
 
 
 def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
@@ -287,7 +417,6 @@ def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
         conv = v_root / "conversations"
         brain = v_root / "brain"
         anno_dir = v_root / "annotations"
-        # 收集该变体下的所有 sid（以 conversations/*.db、brain/* 或 annotations/*.pbtxt 为准）
         sids: set[str] = set()
         if conv.is_dir():
             for db in conv.glob("*.db"):
@@ -301,119 +430,70 @@ def _scan_antigravity(home: Path | None) -> list[AgentSessionRecord]:
                 sids.add(a.stem)
 
         for sid in sorted(sids):
-            meta = conv / f"{sid}.meta" if conv.is_dir() else None
-            db = conv / f"{sid}.db" if conv.is_dir() else None
-            tr = brain / sid / ".system_generated" / "logs" / "transcript.jsonl" if brain.is_dir() else None
-            anno = anno_dir / f"{sid}.pbtxt" if anno_dir.is_dir() else None
-
-            # 过滤既无 transcript 又无 annotations 且 db 较小（48KB 以下，无 steps 记录）的僵尸会话
-            if not (tr and tr.is_file()) and not (anno and anno.is_file()):
-                if db and db.is_file():
-                    try:
-                        if db.stat().st_size <= 49152:
-                            continue
-                    except OSError:
-                        continue
-                else:
-                    continue
-
-            cwd: str | None = None
-            if meta and meta.is_file():
-                try:
-                    data = json.loads(meta.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    data = {}
-                raw = data.get("cwd") if isinstance(data, dict) else None
-                cwd = raw if isinstance(raw, str) and raw else None
-
-            title = ""
-            archived = False
-            if anno and anno.is_file():
-                try:
-                    text = anno.read_text(encoding="utf-8", errors="replace")
-                    m = re.search(r'title:\s*"([^"]*)"', text)
-                    if not m:
-                        m = re.search(r'title:\s*([^\s\r\n]+)', text)
-                    if m and m.group(1):
-                        title = _clean_title(m.group(1)) or ""
-                    if "archived:true" in text.replace(" ", ""):
-                        archived = True
-                except OSError:
-                    pass
-
-            first_ts: str | None = None
-            last_ts: str | None = None
-
-            if tr and tr.is_file():
-                with tr.open(encoding="utf-8", errors="replace") as fh:
-                    for i, line in enumerate(fh):
-                        if i >= _HEAD_LINES:
-                            break
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            obj = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if not isinstance(obj, dict):
-                            continue
-                        if first_ts is None and isinstance(obj.get("created_at"), str):
-                            first_ts = obj["created_at"]
-                        if not title and obj.get("type") == "USER_INPUT":
-                            raw_content = obj.get("content", "")
-                            req = _extract_user_request(raw_content)
-                            if req:
-                                title = _clean_title(req) or ""
-                        if not cwd:
-                            for tc in obj.get("tool_calls") or []:
-                                args = tc.get("args") or {}
-                                if isinstance(args, dict) and args.get("Cwd"):
-                                    c = str(args["Cwd"]).strip('"')
-                                    if Path(c).is_dir():
-                                        cwd = c
-                                        break
-                            if not cwd:
-                                content = obj.get("content", "")
-                                for l in content.splitlines():
-                                    if "Command Working Directory:" in l:
-                                        c = l.split("Command Working Directory:")[1].strip()
-                                        if Path(c).is_dir():
-                                            cwd = c
-                                            break
-                                    elif l.startswith("- ") and (":\\" in l or ":/" in l):
-                                        c = l[2:].strip()
-                                        if Path(c).is_dir():
-                                            cwd = c
-                                            break
-                        if first_ts and title and cwd:
-                            break
-                last_ts = _tail_timestamp(tr)
-
-            created = iso_z_to_zed_ts(first_ts or "")
-            updated = iso_z_to_zed_ts(last_ts or "") or created
-
-            if created is None:
-                mtime_source = tr if (tr and tr.is_file()) else db
-                if not mtime_source or not mtime_source.is_file():
-                    mtime_source = anno
-                if mtime_source and mtime_source.is_file():
-                    created = mtime_ns_to_zed_ts(mtime_source.stat().st_mtime_ns)
-                    updated = updated or created
-                else:
-                    continue
-
-            records.append(
-                AgentSessionRecord(
-                    session_id=sid,
-                    directory=os.path.normpath(cwd) if cwd else "",
-                    title=title or "",
-                    time_created=created or "",
-                    time_updated=updated or created or "",
-                    archived=archived,
-                )
-            )
+            rec = parse_antigravity_session(sid, conv=conv, brain=brain, anno_dir=anno_dir)
+            if rec is not None:
+                records.append(rec)
     return _dedupe_records(records)
+
+
+def parse_pi_file(f: Path) -> AgentSessionRecord:
+    """解析单个 Pi session jsonl 文件。"""
+    sid: str | None = None
+    first_ts: str | None = None
+    cwd: str | None = None
+    title: str | None = None
+    with f.open(encoding="utf-8", errors="replace") as fh:
+        for i, line in enumerate(fh):
+            if i >= _HEAD_LINES:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("type") == "session":
+                sid = sid or obj.get("id")
+                cwd = cwd or obj.get("cwd")
+                first_ts = first_ts or obj.get("timestamp")
+            elif (
+                title is None
+                and obj.get("type") == "message"
+                and isinstance(obj.get("message"), dict)
+            ):
+                m = obj["message"]
+                if m.get("role") == "user":
+                    c = m.get("content")
+                    if isinstance(c, str):
+                        title = c.strip()[:100]
+                    elif isinstance(c, list):
+                        for p in c:
+                            if isinstance(p, dict) and p.get("type") == "text":
+                                title = (p.get("text") or "").strip()[:100]
+                                break
+            if sid and cwd and title:
+                break
+    if not sid:
+        stem = f.stem
+        if "_" in stem:
+            sid = stem.split("_", 1)[1]
+        else:
+            sid = stem
+    created = iso_z_to_zed_ts(first_ts or "")
+    updated = iso_z_to_zed_ts(_tail_timestamp(f) or "") or created
+    if created is None:
+        created = mtime_ns_to_zed_ts(f.stat().st_mtime_ns)
+        updated = updated or created
+    return AgentSessionRecord(
+        session_id=sid,
+        directory=os.path.normpath(cwd) if cwd else "",
+        title=title or "",
+        time_created=created,
+        time_updated=updated or created,
+    )
 
 
 def _scan_pi(home: Path | None) -> list[AgentSessionRecord]:
@@ -422,64 +502,7 @@ def _scan_pi(home: Path | None) -> list[AgentSessionRecord]:
     if not base.is_dir():
         return records
     for f in sorted(base.glob("*/*.jsonl")):
-        sid: str | None = None
-        first_ts: str | None = None
-        cwd: str | None = None
-        title: str | None = None
-        with f.open(encoding="utf-8", errors="replace") as fh:
-            for i, line in enumerate(fh):
-                if i >= _HEAD_LINES:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(obj, dict):
-                    continue
-                if obj.get("type") == "session":
-                    sid = sid or obj.get("id")
-                    cwd = cwd or obj.get("cwd")
-                    first_ts = first_ts or obj.get("timestamp")
-                elif (
-                    title is None
-                    and obj.get("type") == "message"
-                    and isinstance(obj.get("message"), dict)
-                ):
-                    m = obj["message"]
-                    if m.get("role") == "user":
-                        c = m.get("content")
-                        if isinstance(c, str):
-                            title = c.strip()[:100]
-                        elif isinstance(c, list):
-                            for p in c:
-                                if isinstance(p, dict) and p.get("type") == "text":
-                                    title = (p.get("text") or "").strip()[:100]
-                                    break
-                if sid and cwd and title:
-                    break
-        if not sid:
-            stem = f.stem
-            if "_" in stem:
-                sid = stem.split("_", 1)[1]
-            else:
-                sid = stem
-        created = iso_z_to_zed_ts(first_ts or "")
-        updated = iso_z_to_zed_ts(_tail_timestamp(f) or "") or created
-        if created is None:
-            created = mtime_ns_to_zed_ts(f.stat().st_mtime_ns)
-            updated = updated or created
-        records.append(
-            AgentSessionRecord(
-                session_id=sid,
-                directory=os.path.normpath(cwd) if cwd else "",
-                title=title or "",
-                time_created=created,
-                time_updated=updated or created,
-            )
-        )
+        records.append(parse_pi_file(f))
     return _dedupe_records(records)
 
 

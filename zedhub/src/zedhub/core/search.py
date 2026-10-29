@@ -3,18 +3,16 @@
 - 语义在本模块唯一定义，入口层（HTTP/CLI/MCP/GUI）只做参数解析与呈现；
 - **Zed 索引是主表**：它代表「Zed 里看得见的会话」（覆盖 opencode/claude-acp/
   codex-acp/antigravity-acp/pi-acp 等），OpenCode 会话通过 session_id 关联上来
-  补充 directory/model，并可在标题为空时兜底标题；
-- `include_unlinked=True` 时补上未进 Zed 索引的 OpenCode 会话（kind=
-  ``opencode_session``），默认不显示以避免与 Zed 视图重复；
-- OpenCode 源不可用时由调用方降级（degraded 说明），本模块只管过滤与合并，
-  不感知数据源可用性，便于脱离 SQL 单测；
-- 正文全文检索（messages/parts）：由 `core/index.py` 的 FTS5 引擎支持，
-  `content=True` 时联合检索元数据与正文。
+  补充 directory/model/skills，并可在标题为空时兜底标题；
+- `include_unlinked=True` 时补上未进 Zed 索引的外部会话；
+- 正文全文检索（messages/parts）：由 `core/index.py` 的 FTS5 引擎支持；
+- Skill 检索与反查：支持 `request.skill` 参数过滤与 `skill:xxx` 关键词语法。
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from .model import SearchHit, SearchRequest, SearchResult, Session, SessionScope, Thread
 
@@ -27,6 +25,7 @@ FIELD_AGENT = "agent"
 FIELD_ID = "id"
 FIELD_PROJECT = "project"
 FIELD_CONTENT = "content"
+FIELD_SKILL = "skill"
 
 
 def _utc(dt: datetime | None) -> datetime | None:
@@ -49,7 +48,7 @@ def _norm_path(p: str | None) -> str:
 
 
 class SearchService:
-    """把 Zed 线程与 OpenCode 会话投影成统一条目后过滤。"""
+    """把 Zed 线程与多源会话投影成统一条目后过滤。"""
 
     def __init__(
         self,
@@ -59,7 +58,7 @@ class SearchService:
         index_service: Any = None,
     ) -> None:
         self.threads = threads
-        self.sessions = sessions  # None = OpenCode 源不可用（降级）
+        self.sessions = sessions
         self.index_service = index_service
 
     # -- 条目构建 ---------------------------------------------------------------
@@ -97,6 +96,7 @@ class SearchService:
                     updated_at=t.updated_at,
                     interacted_at=t.interacted_at,
                     zed_linked=True,
+                    skills=sess.skills if sess else [],
                 )
             )
 
@@ -127,6 +127,7 @@ class SearchService:
                         updated_at=s.updated_at,
                         interacted_at=None,
                         zed_linked=False,
+                        skills=s.skills or [],
                     )
                 )
         return hits
@@ -143,6 +144,7 @@ class SearchService:
             FIELD_AGENT: hit.agent_id.casefold(),
             FIELD_ID: " ".join(x for x in (hit.thread_id, hit.session_id) if x).casefold(),
             FIELD_PROJECT: "\n".join(hit.projects).casefold(),
+            FIELD_SKILL: " ".join(hit.skills).casefold(),
         }
         matched: set[str] = set()
         for token in tokens:
@@ -157,7 +159,11 @@ class SearchService:
         return hit.updated_at or hit.created_at or _MIN_TS
 
     def search(self, request: SearchRequest) -> SearchResult:
-        tokens = _tokens(request.q)
+        all_tokens = _tokens(request.q)
+        # 拆分出 skill:xxx 语法 token
+        skill_tokens = [t[6:].casefold() for t in all_tokens if t.startswith("skill:")]
+        tokens = [t for t in all_tokens if not t.startswith("skill:")]
+
         since, until = _utc(request.since), _utc(request.until)
         project = (request.project or "").casefold()
         norm_proj = _norm_path(request.project)
@@ -191,6 +197,18 @@ class SearchService:
                 continue
             if request.archived == "only" and not hit.archived:
                 continue
+
+            # Skill 显式参数过滤
+            if request.skill:
+                req_sk = request.skill.strip().casefold()
+                if not any(req_sk in sk.casefold() for sk in hit.skills):
+                    continue
+
+            # skill:xxx 语法过滤
+            if skill_tokens:
+                if not all(any(st in sk.casefold() for sk in hit.skills) for st in skill_tokens):
+                    continue
+
             stamp = self._stamp(hit)
             if since and stamp < since:
                 continue
@@ -204,10 +222,16 @@ class SearchService:
                 else None
             )
 
+            # 如果只有 skill_tokens 而没有 tokens，matched 为空列表，直接算命中
+            if not tokens and skill_tokens:
+                matched = [FIELD_SKILL]
+
             if matched is None and not c_snippets:
                 continue
 
             matched_fields = list(matched or [])
+            if skill_tokens and FIELD_SKILL not in matched_fields:
+                matched_fields.append(FIELD_SKILL)
             if c_snippets:
                 matched_fields.append(FIELD_CONTENT)
                 hit.snippets = c_snippets

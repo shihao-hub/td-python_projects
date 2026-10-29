@@ -76,6 +76,7 @@ class Session(BaseModel):
     updated_at: datetime | None = None
     archived: bool = False
     zed_thread_id: str | None = None    # Zed 索引关联；缺失 = None，不伪造
+    skills: list[str] = []              # 本会话调用的 skills 列表
 
 
 class MessagePart(BaseModel):
@@ -133,6 +134,7 @@ class SearchRequest(BaseModel):
     scope: SessionScope = SessionScope.ALL  # all / zed / external
     include_unlinked: bool = False  # 兼容旧客户端：补上所有外部会话
     content: bool = False         # 是否全文检索消息正文（二期能力）
+    skill: str | None = None      # skill 名称过滤
 
 
 class SearchHit(BaseModel):
@@ -155,6 +157,7 @@ class SearchHit(BaseModel):
     matched_fields: list[str] = []  # title/agent/id/project/content（GUI 高亮用）
     zed_linked: bool = False        # 是否存在于 Zed 索引
     snippets: list[ContentSnippet] = []  # 正文检索命中时的上下文摘录
+    skills: list[str] = []               # 本会话识别出的 skills 列表
 
 
 class SearchResult(BaseModel):
@@ -225,3 +228,11 @@ def parse_paths(raw: str | None) -> list[str]:
     if not raw:
         return []
     return [p for p in raw.split("\n") if p.strip()]
+
+
+class SkillStat(BaseModel):
+    """Skill 调用聚合统计条目。"""
+
+    name: str
+    count: int = 0
+    exists_on_disk: bool = False

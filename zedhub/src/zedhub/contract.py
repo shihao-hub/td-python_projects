@@ -149,11 +149,22 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
         query_params=("source", "limit", "thread_id"),
     ),
     HttpEndpoint(
+        method="GET", path=f"{API_PREFIX}/sessions/{{session_id}}/skills", api_method="sessions.skills",
+        summary="Detailed skills invoked in a session (timeline + disk existence).",
+        path_params=("session_id",),
+        query_params=("source",),
+    ),
+    HttpEndpoint(
+        method="GET", path=f"{API_PREFIX}/skills", api_method="skills.list",
+        summary="Global aggregated skill invocations ranked by frequency.",
+        query_params=("limit",),
+    ),
+    HttpEndpoint(
         method="GET", path=f"{API_PREFIX}/search", api_method="search.sessions",
         summary="Search session metadata across Zed-managed and externally discovered sessions,"
                 " optionally with full-text message content search.",
         query_params=("q", "agent", "project", "archived", "since", "until", "limit",
-                      "scope", "include_unlinked", "content"),
+                      "scope", "include_unlinked", "content", "skill"),
     ),
     HttpEndpoint(
         method="GET", path=f"{API_PREFIX}/index/status", api_method="index.status",
