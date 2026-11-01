@@ -4,6 +4,7 @@
 - douyinnotify                     立即检查一次所有博主（等价于 check）
 - douyinnotify check --notify      检查 + 发现新视频时发飞书（定时任务用的就是它）
 - douyinnotify check --dry-run     配合 --notify：只打印将执行的 lark-cli 命令与消息体
+- douyinnotify push --file <md>    只发送不检查：把 markdown 文件当飞书消息投递（agent 撰写文案用）
 - douyinnotify list                查看监控列表与上次检查快照
 - douyinnotify add <主页URL|sec_uid>    添加博主
 - douyinnotify remove <sec_uid>    移除博主
@@ -21,6 +22,7 @@ import json
 import logging
 import shlex
 import sys
+from pathlib import Path
 
 import typer
 
@@ -150,6 +152,43 @@ def check(
     """立即检查一次所有博主，发现新视频可选推送飞书。"""
     _prepare_stream()
     run_check(notify, dry_run, json_output, no_save)
+
+
+@app.command("push")
+def push(
+    file: str = typer.Option(..., "--file", help="待发送 markdown 文件路径（UTF-8）"),
+    title: str = typer.Option("", "--title", help="post 标题；缺省取 markdown 首行"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只打印将执行的命令，不实发"),
+) -> None:
+    """把 markdown 文件当飞书 post 发送（只发不查，供 agent 撰写文案后投递）。
+
+    与 check --notify 的模板文案解耦：本命令不读 watchlist / state，
+    内容完全由调用方生成，失败直接以退出码 1 交还。
+    """
+    _prepare_stream()
+    path = Path(file)
+    try:
+        # utf-8-sig：兼容被 PowerShell 等工具写入的 BOM，避免 BOM 污染首行标题
+        markdown = path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        _print(f"读取消息文件失败: {exc}", file=sys.stderr)
+        raise typer.Exit(code=2) from None
+    if not markdown.strip():
+        _print("消息内容为空，拒绝发送", file=sys.stderr)
+        raise typer.Exit(code=2) from None
+
+    resolved_title = title.strip() or None
+    if dry_run:
+        _print(shlex.join(notifier.build_command(markdown, resolved_title)))
+        return
+
+    try:
+        message_id = notifier.send_lark(markdown, resolved_title)
+    except notifier.NotifyError as exc:
+        logger.error("飞书发送失败: %s", exc)
+        _print(f"飞书发送失败: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1) from None
+    _print(f"已发送 message_id={message_id}")
 
 
 def _display_name(blogger: watchlist.Blogger) -> str:

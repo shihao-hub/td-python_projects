@@ -7,6 +7,7 @@
 | 业务用例 | CLI 入口 | MCP 工具 | 说明 |
 |---|---|---|---|
 | 立即检查一次 | `douyinnotify`（默认） / `check` | `douyinnotify.check` | 抓取 → 差集比对 → 写 state；`--notify` 仅 CLI；MCP 侧不发送 |
+| 只发不查 | `push --file <md>` | — | 把 markdown 文件当飞书 post 投递，供 agent 撰写文案后调用 |
 | 查看监控状态 | `list` | `douyinnotify.list` | watchlist + 检查间隔 + 上次检查快照 |
 | 添加博主 | `add <主页URL\|短链\|sec_uid>` | `douyinnotify.add` | 支持 `www.douyin.com/user/...`、`v.douyin.com` 短链、裸 sec_uid |
 | 移除博主 | `remove <sec_uid\|URL>` | `douyinnotify.remove` | 同步清理该博主已见记录 |
@@ -32,13 +33,22 @@ uv run douyinnotify uninstall_schedule  # 随时卸载
 uv run douyinnotify check --json              # JSON 包络输出
 uv run douyinnotify check --no-save           # 只探测不写 state
 uv run douyinnotify check --notify --dry-run  # 打印将执行的 lark-cli 命令与消息体，不实发
+uv run douyinnotify push --file msg.md        # 只发不查：把 msg.md 当飞书 post 投递
 ```
 
-## 运行方式（Windows 计划任务）
+## 运行方式
 
-`install_schedule` 注册任务 `douyinnotify_check`，`/SC HOURLY /MO <check_interval_hours> /ST <schedule_start>`（默认 **9 点开始每 6 小时**，即 09:00 / 15:00 / 21:00 / 03:00），指向 venv 内 `pythonw.exe -m douyinnotify --notify`——**pythonw 无控制台，定时触发零弹窗**（stdout 失效由打印容错兜底，排障看日志）。计划任务在全部开发/验证完毕后才注册；`uninstall_schedule` 幂等。
+当前采用 **DSH 自动化任务**（`dsh` 的 cron 定时提醒，03 / 09 / 15 / 21 点各一次），到点由 agent 执行 `check --json` 后自行判断：
 
-**修改检查频率后需重跑 `install_schedule`** 才对已注册任务生效（schtasks 不感知配置文件变化）。
+- 全部抓取成功且无新视频 → 静默，不发消息；
+- 有新视频 → agent 撰写飞书摘要，用 `push --file` 投递（文案可含内容解读，非固定模板）；
+- 有博主抓取失败 → agent 读日志末尾诊断（风控 / 接口变更 / 网络）后发飞书告警。
+
+该模式依赖 DSH 宿主进程常驻，已配 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 隐藏自启（`~/.dsh/autostart/dsh-web.vbs`，拉起 `dsh web --port 11111 --no-open`）。
+
+旧的 Windows 计划任务模式仍保留能力（不需要 DSH 常驻时可用）：`install_schedule` 注册任务 `douyinnotify_check`，`/SC HOURLY /MO <check_interval_hours> /ST <schedule_start>`（默认 **9 点开始每 6 小时**，即 09:00 / 15:00 / 21:00 / 03:00），指向 venv 内 `pythonw.exe -m douyinnotify --notify`——**pythonw 无控制台，定时触发零弹窗**（stdout 失效由打印容错兜底，排障看日志）。`uninstall_schedule` 幂等。
+
+**修改检查频率后**：DSH 模式需更新 schedule（cron 表达式）；计划任务模式需重跑 `install_schedule`（schtasks 不感知配置文件变化）。
 
 ## 配置与数据目录
 
