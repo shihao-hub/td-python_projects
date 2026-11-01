@@ -6,6 +6,7 @@
 - todonotify --notify --dry-run  只打印将执行的 lark-cli 命令与消息体，不实发
 - todonotify --json              JSON 输出（pi / opencode 等 agent 的对接面）
 - todonotify --dir <path>        覆盖默认待办目录
+- todonotify push --file <md>    只发不扫：把 markdown 文件当飞书消息投递（agent 撰写分析后调用）
 - todonotify install_schedule    注册 09:00 / 20:00 两个计划任务
 - todonotify uninstall_schedule  卸载计划任务
 
@@ -98,6 +99,41 @@ def main(
         _print(shlex.join(notifier.build_command(markdown)))
         _print("[dry-run] 消息体：")
         _print(markdown)
+        return
+
+    try:
+        message_id = notifier.send_lark(markdown)
+    except notifier.NotifyError as exc:
+        logger.error("飞书发送失败: %s", exc)
+        _print(f"飞书发送失败: {exc}", file=sys.stderr)
+        raise typer.Exit(code=2) from None
+    logger.info("飞书通知已发送 message_id=%s", message_id)
+    _print(f"已发送飞书通知（message_id={message_id}）")
+
+
+@app.command("push")
+def push(
+    file: Path = typer.Option(..., "--file", help="待发送 markdown 文件路径（UTF-8）"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只打印将执行的命令，不实发"),
+) -> None:
+    """把 markdown 文件当飞书 post 发送（只发不扫，供 agent 撰写分析后投递）。
+
+    与 --notify 的固定模板解耦：本命令不扫描待办目录，
+    内容完全由调用方生成，失败以退出码 2 交还。
+    """
+    _prepare_stream()
+    try:
+        # utf-8-sig：兼容外部工具写入的 BOM，避免 BOM 污染首行标题
+        markdown = file.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        _print(f"读取消息文件失败: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1) from None
+    if not markdown.strip():
+        _print("消息内容为空，拒绝发送", file=sys.stderr)
+        raise typer.Exit(code=1) from None
+
+    if dry_run:
+        _print(shlex.join(notifier.build_command(markdown)))
         return
 
     try:
