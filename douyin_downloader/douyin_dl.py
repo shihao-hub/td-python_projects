@@ -743,8 +743,20 @@ def navigate_and_capture_headers(
         ws.send(json.dumps({"id": 101, "method": "Page.navigate", "params": {"url": url}}))
         # 短超时 + 截止时间轮询：事件是零散到达的，不能一次 recv 就收工。
         ws.settimeout(1.0)
-        deadline = time.time() + settle
+        start_t = time.time()
+        deadline = start_t + settle
+        play_triggered = False
         while time.time() < deadline:
+            if not play_triggered and (time.time() - start_t) >= 2.0:
+                try:
+                    ws.send(json.dumps({
+                        "id": 102,
+                        "method": "Runtime.evaluate",
+                        "params": {"expression": "document.querySelectorAll('video').forEach(v => { v.muted = true; v.play().catch(() => {}); })"}
+                    }))
+                    play_triggered = True
+                except Exception:
+                    pass
             try:
                 raw = ws.recv()
             except websocket.WebSocketTimeoutException:
@@ -1390,24 +1402,35 @@ def page_title(ws_url: str, attempts: int = 8, interval: float = 1.0) -> str:
     return ""
 
 
-def capture_stream_urls(ws_url: str, attempts: int = 12, interval: float = 1.0) -> tuple[str, str, str]:
+def capture_stream_urls(
+    ws_url: str,
+    attempts: int = 15,
+    interval: float = 1.0,
+    recorded_urls: Iterable[str] = (),
+) -> tuple[str, str, str]:
     """在页面中轮询捕获 (视频流地址, 音频流地址, 视频来源)。
 
     抖音是 DASH 音视频分离：`media-video-*` 与 `media-audio-*` 是两条独立流，只取其一
-    必然残缺（历史 bug：这里曾用 `!n.includes('media-audio')` 主动滤掉音频，导致抖音
-    视频永远无声）。两者同属一份 manifest，时间轴天然对齐，下载后经 ffmpeg 合并。
+    必然残缺。两者同属一份 manifest，时间轴天然对齐，下载后经 ffmpeg 合并。
 
-    优先级：资源记录里的 DASH 成对流 > `<video>` 元素 src（仅作视频兜底）。返回的视频
-    来源供调用方判断能否与 DASH 音频配对——混用两路 rendition 会造成静默失步。
-    音频缺失不算失败，由调用方降级处理。
+    优先级：资源记录与 Network 录制里的 DASH 成对流 > `<video>` 元素 src（仅作视频兜底）。
+    为支持长视频（长视频常不自动起播），轮询期间主动触发 video.play() 启动缓冲。
     """
     video_url = ""
     audio_url = ""
     video_source = ""
+    recorded_list = list(recorded_urls)
     for _ in range(attempts):
+        # 主动触发起播，避免中长视频因浏览器自动播放限制未发网络流请求
+        try:
+            eval_cdp(ws_url, "document.querySelectorAll('video').forEach(v => { v.muted = true; v.play().catch(() => {}); })")
+        except Exception:
+            pass
+
         resources = eval_cdp(ws_url, _JS_DOUYIN_RESOURCES) or []
-        audio = [u for u in resources if "media-audio" in u]
-        video = [u for u in resources if "media-audio" not in u and "/video/tos/" in u]
+        combined = list(dict.fromkeys(recorded_list + resources))
+        audio = [u for u in combined if "media-audio" in u]
+        video = [u for u in combined if "media-audio" not in u and "/video/tos/" in u]
         if video:
             video_url = video[-1]
             video_source = VIDEO_SOURCE_DASH
@@ -1456,7 +1479,9 @@ def download_one(
         except Exception as exc:  # 采集失败不致命：退化为 UA + Referer 手拼
             emit(f"[!] 请求头采集失败（{type(exc).__name__}: {exc}），退化为默认头。")
 
-        video_stream, audio_stream, video_source = capture_stream_urls(tab_ws_url)
+        video_stream, audio_stream, video_source = capture_stream_urls(
+            tab_ws_url, recorded_urls=recorded.keys()
+        )
         if not video_stream:
             raise AppError("stream_not_found", ERROR_MESSAGES["stream_not_found"])
 
