@@ -367,7 +367,7 @@ def _run_hidden(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
 
 
 def cdpx_url(port: int, path: str) -> str:
-    return f"http://127.0.0.1:{port}{path}"
+    return f"http://localhost:{port}{path}"
 
 
 def chrome_ready(port: int) -> bool:
