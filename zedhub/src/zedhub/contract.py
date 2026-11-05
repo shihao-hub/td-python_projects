@@ -96,6 +96,18 @@ class IndexBuildBody(BaseModel):
     rebuild: bool = False
 
 
+class ExportSessionsBody(BaseModel):
+    """POST /api/v1/export/sessions 请求体（会话导出为可读文件）。"""
+
+    project: str                      # 工作区目录（exact=true 时按归一化全等匹配）
+    agent: str = "antigravity-acp"    # Zed agent_id
+    archived: str = "no"              # no | only | all
+    exact: bool = True                # 默认精确匹配目录（不命中子目录）
+    output: str | None = None         # 输出目录；缺省落数据根 exports/<agent>-<yyyymmdd>
+    detail: str = "brief"             # minimal | brief | full
+    formats: str = "md,html"          # md / html / md,html
+
+
 HEALTH = HttpEndpoint(
     method="GET",
     path=f"{API_PREFIX}/health",
@@ -202,6 +214,12 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
         method="POST", path=f"{API_PREFIX}/archive/import", api_method="archive.import",
         summary="Import archive into local Zed/OpenCode (dry-run by default; apply=true writes).",
         body_model=ArchiveImportBody, sse=True,
+    ),
+    HttpEndpoint(
+        method="POST", path=f"{API_PREFIX}/export/sessions", api_method="export.sessions",
+        summary="Export Zed sessions as self-contained, human-readable Markdown/HTML files"
+                " with an auto-generated handoff summary (default agent: antigravity-acp).",
+        body_model=ExportSessionsBody, sse=True,
     ),
 )
 

@@ -72,6 +72,30 @@ zedhub mcp    ← MCP 桥：stdio(MCP) ↔ HTTP daemon
   名匹配不可靠），靠「已存在即跳过」的文件级安全策略保证不写坏在用文件；
   Zed db 写入前的 zed/opencode 进程检查照常强制。
 
+## 会话导出（export sessions）
+
+把 Zed 侧边栏里的会话导出为一套**自包含文件**：HTML 给人读，Markdown 给其他
+AI 接手。不依赖 daemon 常驻，产物可直接双击打开或整文件丢给任意模型。
+
+- **产物结构**：`index.html`（可搜索目录）+ `index.md` + `sessions/<日期>_<时间>_<标题>.{html,md}`；
+- **单会话内容**：YAML front-matter（会话身份/统计）→ 自动生成的「给接手者的
+  快速上下文」（任务、目录、涉及文件、执行命令、最后结论、agy CHECKPOINT 原文）
+  → 对话全文；工具调用与结果默认折叠；
+- **数据源覆盖**：优先 `brain/<sid>/.system_generated/logs/transcript.jsonl`（无损）；
+  缺失时回退 `conversations/<sid>.db` 的 protobuf 文本块扫描重建（标「启发式重建」）；
+- **匹配语义**：默认 `--exact` 按归一化后目录全等匹配，不命中子目录；
+- **详略**：`--detail brief`（默认，工具结果截 300 字）/ `minimal` / `full`；
+- **默认落盘**：`<数据根>/exports/<agent>-<yyyymmdd>/`（不写入 Zed / agy 数据目录）。
+
+```powershell
+uv run zedhub export sessions "D:\Users\language_projects" --agent antigravity-acp
+uv run zedhub export sessions <dir> --archived all --detail full -o <out>
+```
+
+已知边界：protobuf 重建会话丢工具结构化参数、可能混入少量元数据噪声，产物
+已显式标注；`truncated_fields` 标记的原文在源侧就被 agy 截断，导出如实标
+`[已截断]`，不补造内容。
+
 ## 通道隔离（dev / prod，强约束）
 
 数据目录、daemon 地址文件、实例锁、日志、索引库全部按通道分离，开发调试
@@ -249,6 +273,7 @@ uv run zedhub sessions link <dir> --source antigravity   # 三源补登/跨目�
 uv run zedhub archive export <project> -o a.db
 uv run zedhub archive export <project> -o a.db --source claude-code  # v2（codex/antigravity 同）
 uv run zedhub archive import a.db --target <dir>                      # dry-run（--apply 才写）
+uv run zedhub export sessions <dir> --agent antigravity-acp          # 会话导出（HTML+MD）
 uv run zedhub schema                         # 离线契约导出（不连 daemon）
 ```
 

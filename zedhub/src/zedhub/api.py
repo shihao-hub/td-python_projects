@@ -514,7 +514,6 @@ def _sessions_link(params: dict, ctx: CallContext, progress=noop_progress) -> An
 
 def _archive_export(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     from .core.archive import export_archive
-
     project = _opt_str(params, "project")
     if project is None:
         raise InvalidParamsError("param 'project' is required")
@@ -565,6 +564,43 @@ def _archive_import(params: dict, ctx: CallContext, progress=noop_progress) -> A
     return res
 
 
+def _export_sessions(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
+    """批量导出会话为可阅读 / 可交接的本地文件（Markdown + HTML）。"""
+    from .export.bundle import default_export_dir, export_threads
+
+    project = _opt_str(params, "project")
+    if project is None:
+        raise InvalidParamsError("param 'project' is required")
+    agent = _opt_str(params, "agent") or "antigravity-acp"
+    detail = _opt_str(params, "detail") or "brief"
+    if detail not in ("minimal", "brief", "full"):
+        raise InvalidParamsError(
+            f"param 'detail' must be one of ('minimal', 'brief', 'full'), got {detail!r}"
+        )
+    output = _opt_str(params, "output")
+    out_dir = Path(output) if output else default_export_dir(agent)
+
+    raw_formats = params.get("formats")
+    if isinstance(raw_formats, (list, tuple)):
+        formats = tuple(str(f) for f in raw_formats)
+    elif isinstance(raw_formats, str):
+        formats = tuple(f.strip() for f in raw_formats.split(",") if f.strip())
+    else:
+        formats = ("md", "html")
+    formats = tuple(f for f in formats if f in ("md", "html")) or ("md", "html")
+
+    with open_snapshot(ctx.zed_db) as snap:
+        with ZedDb(snap) as db:
+            threads = ThreadService(db).list_threads(
+                project=project, agent=agent, archived=_archived(params),
+                exact=_opt_bool(params, "exact", True),
+            )
+    return export_threads(
+        threads, output_dir=out_dir, agent=agent, directory=project,
+        detail=detail, formats=formats, progress=progress,
+    )
+
+
 # -- 注册表 -----------------------------------------------------------------------
 
 METHODS: dict[str, Callable[..., Any]] = {
@@ -587,6 +623,7 @@ METHODS: dict[str, Callable[..., Any]] = {
     "archive.export": _archive_export,
     "archive.inspect": _archive_inspect,
     "archive.import": _archive_import,
+    "export.sessions": _export_sessions,
 }
 
 

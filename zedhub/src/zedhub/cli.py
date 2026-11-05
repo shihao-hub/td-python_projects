@@ -490,6 +490,64 @@ def _render_archive_import(d: dict) -> None:
         print(d["note"])
 
 
+# -- export（会话导出为可读文件） ------------------------------------------------
+
+
+export_app = typer.Typer(
+    help="Export sessions as readable HTML and AI-handoff Markdown.",
+    no_args_is_help=True,
+)
+app.add_typer(export_app, name="export")
+
+
+@export_app.command("sessions")
+def export_sessions(
+    project: Annotated[str, typer.Argument(help="Workspace directory (exact match by default).")],
+    agent: Annotated[str, typer.Option("--agent", help="Zed agent id, e.g. antigravity-acp.")] = "antigravity-acp",
+    archived: Annotated[str, typer.Option("--archived", help="no=active only (default), only, all.")] = "no",
+    exact: Annotated[bool, typer.Option("--exact/--fuzzy", help="Match folder path exactly (default) or as substring.")] = True,
+    output: Annotated[Optional[Path], typer.Option("-o", "--output", help="Output directory (default: <data dir>/exports/<agent>-<date>).")] = None,
+    detail: Annotated[str, typer.Option("--detail", help="minimal | brief | full.")] = "brief",
+    formats: Annotated[str, typer.Option("--formats", help="md | html | md,html.")] = "md,html",
+    host: HOST_OPT = None,
+    json_out: JSON_OPT = False,
+) -> None:
+    """Export sessions as HTML (for reading) + Markdown (for other AI agents)."""
+    def fn():
+        body: dict = {
+            "project": project, "agent": agent, "archived": archived, "exact": exact,
+            "detail": detail, "formats": formats,
+        }
+        if output is not None:
+            body["output"] = str(output)
+        on_stage = None if json_out else _render_stage
+        return DaemonClient(host).call_sse(
+            "POST", f"{API_PREFIX}/export/sessions", body=body, on_stage=on_stage,
+        )
+
+    data, _ = _run_query(fn, as_json=json_out)
+    if json_out:
+        _emit_new(data, as_json=True)
+        return
+    print()
+    _render_export(data)
+
+
+def _render_export(d: dict) -> None:
+    total_mb = d.get("total_bytes", 0) / 1024 / 1024
+    print(f"导出目录: {d.get('output_dir')}")
+    print(f"会话 {d.get('session_count')} 个（启发式重建 {d.get('reconstructed_count', 0)} 个）"
+          f"，跳过 {d.get('skipped_count', 0)} 个，共 {total_mb:.2f} MB")
+    for item in d.get("sessions") or []:
+        flag = "[重建]" if item.get("reconstructed") else "[明文]"
+        when = item.get("created_at", "")[:16].replace("T", " ")
+        print(f"  {flag} {when}  {item.get('title') or '(未命名)'}")
+    for item in (d.get("skipped") or [])[:10]:
+        print(f"  [跳过] {item.get('session_id') or item.get('thread_id')}: {item.get('reason')}")
+    index = Path(d.get("output_dir") or "") / "index.html"
+    print(f"\n打开阅读: {index}")
+
+
 @app.command()
 def schema(
     channel: Annotated[str, typer.Option("--channel", help="all | http | mcp | ws | rpc | cli")] = "all",

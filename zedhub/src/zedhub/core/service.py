@@ -6,6 +6,7 @@ ThreadService 消费 ZedDb 快照；参数、排序、空结果与错误语义�
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
 from .errors import NotFoundError
@@ -31,8 +32,13 @@ class ThreadService:
         until: datetime | None = None,
         search: str | None = None,
         limit: int | None = None,
+        exact: bool = False,
     ) -> list[Thread]:
-        """筛选 thread；``archived`` 默认隐藏已归档（对齐 Zed 自身行为）。"""
+        """筛选 thread；``archived`` 默认隐藏已归档（对齐 Zed 自身行为）。
+
+        ``exact=True`` 时 project 按归一化后全等匹配（不命中子目录），
+        与 ``sessions link --exact`` / ``archive export --exact`` 同语义。
+        """
         q = (search or "").strip().casefold()
 
         def utc(dt: datetime) -> datetime:
@@ -40,10 +46,15 @@ class ThreadService:
             return dt.astimezone() if dt.tzinfo is None else dt
 
         since, until = utc(since) if since else None, utc(until) if until else None
+        want_exact = os.path.normpath(project).casefold() if (project and exact) else ""
         out: list[Thread] = []
         for t in self.db.load_threads():
-            if project and not any(project.casefold() in p.casefold() for p in t.projects):
-                continue
+            if project:
+                if exact:
+                    if not any(os.path.normpath(p).casefold() == want_exact for p in t.projects):
+                        continue
+                elif not any(project.casefold() in p.casefold() for p in t.projects):
+                    continue
             if agent and t.agent_id != agent:
                 continue
             if archived == "no" and t.archived:

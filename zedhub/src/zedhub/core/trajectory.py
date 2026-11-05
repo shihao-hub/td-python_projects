@@ -299,7 +299,8 @@ def parse_antigravity_transcript(path: Path, *, limit: int = 2000) -> list[Timel
                 content = obj.get("content", "")
                 if isinstance(content, str) and content.strip():
                     events.append(TimelineEvent(role="assistant", text=content[:8000], ts=ts))
-            elif t in ("SEARCH_WEB", "VIEW_FILE", "RUN_COMMAND", "CLIENT_VIEW_FILE", "CLIENT_EDIT_FILE"):
+            elif t in ("SEARCH_WEB", "VIEW_FILE", "RUN_COMMAND", "CLIENT_VIEW_FILE",
+                       "CLIENT_EDIT_FILE", "AGENCY_TOOL_CALL"):
                 # 工具执行结果回声
                 status = obj.get("status", "")
                 content = obj.get("content", "")
@@ -310,6 +311,14 @@ def parse_antigravity_transcript(path: Path, *, limit: int = 2000) -> list[Timel
                         status=str(status),
                         text=content[:8000],
                         ts=ts,
+                    ))
+            elif t in ("CHECKPOINT", "SYSTEM_MESSAGE"):
+                # agy 自带的压缩进度摘要 / 子任务通知：交接价值高，独立成 system
+                content = obj.get("content", "")
+                if isinstance(content, str) and content.strip():
+                    events.append(TimelineEvent(
+                        role="system", name=t.lower(), status=str(obj.get("status", "")),
+                        text=content[:8000], ts=ts,
                     ))
             else:
                 # 其他类型进入 raw
