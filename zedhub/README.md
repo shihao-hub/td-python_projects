@@ -96,6 +96,37 @@ uv run zedhub export sessions <dir> --archived all --detail full -o <out>
 已显式标注；`truncated_fields` 标记的原文在源侧就被 agy 截断，导出如实标
 `[已截断]`，不补造内容。
 
+## 批量归档 / 恢复会话（sessions archive）
+
+Zed 没有批量归档入口。`sessions archive` 按 **agent + 工作区**批量把会话标记为
+归档，并写入一份**精确 thread_id 的 undo 清单**，随时可原样恢复：
+
+- 默认 dry-run（只读快照，可开着 Zed 查看）；
+- `--apply` 才写库，写前强制要求 **Zed / opencode 完全退出**（WAL 竞态）；
+- 写前自动备份 Zed 三件套到 `<数据根>/backups/<operation_id>/`；
+- undo 清单同目录 `undo-archive.json`，恢复只回滚清单内的会话，不误伤
+  用户后来手动归档的其他会话；
+- 恢复后清单标记 `restored_at`，重复恢复会被拒绝（防误操作）。
+
+```powershell
+# 1. 先看会归档哪些（安全，无需关 Zed）
+uv run zedhub sessions archive --agent antigravity-acp --project "D:\Users\language_projects"
+
+# 2. 关闭 Zed 后执行
+uv run zedhub sessions archive --agent antigravity-acp --project "D:\Users\language_projects" --apply
+
+# 3. 查看历史归档操作（含 operation_id）
+uv run zedhub sessions archive --list
+
+# 4. 恢复（默认最近一次、且尚未恢复过的归档；先 dry-run）
+uv run zedhub sessions archive --restore
+uv run zedhub sessions archive --restore --apply
+uv run zedhub sessions archive --restore --operation <operation_id> --apply
+```
+
+数据不动：归档只改 Zed 的 `sidebar_threads.archived` 标记，agy 的
+`brain/` / `conversations/` 原文件不受影响；导出产物也不受影响。
+
 ## 通道隔离（dev / prod，强约束）
 
 数据目录、daemon 地址文件、实例锁、日志、索引库全部按通道分离，开发调试
@@ -274,6 +305,8 @@ uv run zedhub archive export <project> -o a.db
 uv run zedhub archive export <project> -o a.db --source claude-code  # v2（codex/antigravity 同）
 uv run zedhub archive import a.db --target <dir>                      # dry-run（--apply 才写）
 uv run zedhub export sessions <dir> --agent antigravity-acp          # 会话导出（HTML+MD）
+uv run zedhub sessions archive --agent antigravity-acp --project <dir>   # 批量归档（--apply 才写）
+uv run zedhub sessions archive --restore --apply                      # 按 undo 清单恢复
 uv run zedhub schema                         # 离线契约导出（不连 daemon）
 ```
 

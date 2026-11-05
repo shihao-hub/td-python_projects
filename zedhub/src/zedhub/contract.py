@@ -108,6 +108,18 @@ class ExportSessionsBody(BaseModel):
     formats: str = "md,html"          # md / html / md,html
 
 
+class SessionsArchiveBody(BaseModel):
+    """POST /api/v1/sessions/archive 请求体（批量归档 / 恢复，可逆）。"""
+
+    agent: str = "antigravity-acp"    # Zed agent_id
+    project: str = ""                 # 工作区目录（exact=true 时精确匹配）
+    exact: bool = True
+    restore: bool = False             # true = 按 undo 清单恢复
+    operation_id: str | None = None   # 指定恢复哪一次归档操作
+    list_operations: bool = False     # true = 只列出可恢复的归档操作
+    apply: bool = False               # 默认 dry-run；true 才写库
+
+
 HEALTH = HttpEndpoint(
     method="GET",
     path=f"{API_PREFIX}/health",
@@ -214,6 +226,12 @@ HTTP_ENDPOINTS: tuple[HttpEndpoint, ...] = (
         method="POST", path=f"{API_PREFIX}/archive/import", api_method="archive.import",
         summary="Import archive into local Zed/OpenCode (dry-run by default; apply=true writes).",
         body_model=ArchiveImportBody, sse=True,
+    ),
+    HttpEndpoint(
+        method="POST", path=f"{API_PREFIX}/sessions/archive", api_method="sessions.archive",
+        summary="Batch archive or restore Zed sessions by agent + workspace (reversible;"
+                " dry-run by default; apply=true writes; requires Zed closed).",
+        body_model=SessionsArchiveBody, sse=True,
     ),
     HttpEndpoint(
         method="POST", path=f"{API_PREFIX}/export/sessions", api_method="export.sessions",

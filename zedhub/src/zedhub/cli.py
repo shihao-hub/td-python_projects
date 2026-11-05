@@ -292,6 +292,83 @@ def _render_stage(stage: dict, *, refresh: bool = True) -> None:
           end=end, flush=True)
 
 
+@sessions_app.command("archive")
+def sessions_archive(
+    agent: Annotated[str, typer.Option("--agent", help="Zed agent id, e.g. antigravity-acp.")] = "antigravity-acp",
+    project: Annotated[Optional[str], typer.Option("--project", help="Workspace directory (exact match by default).")] = None,
+    exact: Annotated[bool, typer.Option("--exact/--fuzzy", help="Match folder path exactly (default) or as substring.")] = True,
+    restore: Annotated[bool, typer.Option("--restore", help="Restore sessions recorded by a previous archive (undo list).")] = False,
+    operation: Annotated[Optional[str], typer.Option("--operation", help="Restore a specific archive operation id.")] = None,
+    list_operations: Annotated[bool, typer.Option("--list", help="List archive operations available for restore.")] = False,
+    apply: Annotated[bool, typer.Option("--apply", help="Actually write (default: dry-run plan only; requires Zed closed).")] = False,
+    host: HOST_OPT = None,
+    json_out: JSON_OPT = False,
+) -> None:
+    """Batch archive/restore Zed sessions (reversible; dry-run by default)."""
+    def fn():
+        body = {
+            "agent": agent, "project": project or "", "exact": exact,
+            "restore": restore, "operation_id": operation,
+            "list_operations": list_operations, "apply": apply,
+        }
+        if apply:
+            on_stage = None if json_out else _render_stage
+            return DaemonClient(host).call_sse(
+                "POST", f"{API_PREFIX}/sessions/archive", body=body, on_stage=on_stage,
+            )
+        return DaemonClient(host).call(
+            "POST", f"{API_PREFIX}/sessions/archive", timeout=600.0, body=body,
+        )
+
+    data, _ = _run_query(fn, as_json=json_out)
+    if json_out:
+        _emit_new(data, as_json=True)
+        return
+    print()
+    _render_archive_sessions(data)
+
+
+def _render_archive_sessions(d: dict) -> None:
+    action = d.get("action")
+    if action == "list":
+        ops = d.get("operations") or []
+        if not ops:
+            print("(没有可恢复的归档记录)")
+            return
+        print(f"{'OPERATION':<34}  {'AGENT':<20}  {'COUNT':>5}  {'CREATED':<20}  RESTORED")
+        for op in ops:
+            print(f"{str(op.get('operation_id'))[:34]:<34}  "
+                  f"{str(op.get('agent') or '-')[:20]:<20}  "
+                  f"{int(op.get('count') or 0):>5}  "
+                  f"{str(op.get('created_at') or '-')[:19]:<20}  "
+                  f"{op.get('restored_at') or '-'}")
+        return
+
+    state = "APPLIED" if d.get("applied") else "DRY-RUN"
+    verb = "恢复" if action == "restore" else "归档"
+    print(f"[{state}] {verb} agent={d.get('agent')} count={d.get('count')} "
+          f"skipped={d.get('skipped', 0)}")
+    if d.get("project"):
+        print(f"工作区: {d['project']}")
+    for item in (d.get("threads") or [])[:20]:
+        when = str(item.get("created_at") or "")[:16].replace("T", " ")
+        try:
+            from datetime import datetime as _dt
+            when = _dt.fromisoformat(item["created_at"]).astimezone().strftime("%Y-%m-%d %H:%M")
+        except (ValueError, KeyError, TypeError):
+            pass
+        print(f"  {when}  {item.get('title') or '(未命名)'}")
+    if len(d.get("threads") or []) > 20:
+        print(f"  ... 共 {len(d['threads'])} 个")
+    if d.get("applied"):
+        print(f"operation: {d.get('operation_id')}")
+        print(f"undo 清单: {d.get('undo_file')}")
+        for b in d.get("backup_dirs") or []:
+            print(f"backup: {b}")
+    else:
+        print("\n" + (d.get("note") or "dry-run；关闭 Zed 后加 --apply 执行"))
+
+
 @sessions_app.command("link")
 def sessions_link(
     project: Annotated[str, typer.Argument(help="Directory path or substring (case-insensitive).")],

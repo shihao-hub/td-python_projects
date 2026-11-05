@@ -564,6 +564,24 @@ def _archive_import(params: dict, ctx: CallContext, progress=noop_progress) -> A
     return res
 
 
+def _sessions_archive(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
+    """批量归档 / 恢复 Zed 会话（默认 dry-run，apply=true 才写库）。"""
+    from .core.archiving import run_archive
+
+    agent = _opt_str(params, "agent") or "antigravity-acp"
+    project = _opt_str(params, "project") or ""
+    restore = _opt_bool(params, "restore")
+    list_operations = _opt_bool(params, "list_operations")
+    operation_id = _opt_str(params, "operation_id")
+    if not restore and not list_operations and not project:
+        raise InvalidParamsError("param 'project' is required unless --restore/--list")
+    return run_archive(
+        agent=agent, project=project, exact=_opt_bool(params, "exact", True),
+        restore=restore, operation_id=operation_id, list_operations=list_operations,
+        apply=_opt_bool(params, "apply"), zed_db=ctx.zed_db, progress=progress,
+    )
+
+
 def _export_sessions(params: dict, ctx: CallContext, progress=noop_progress) -> Any:
     """批量导出会话为可阅读 / 可交接的本地文件（Markdown + HTML）。"""
     from .export.bundle import default_export_dir, export_threads
@@ -624,6 +642,7 @@ METHODS: dict[str, Callable[..., Any]] = {
     "archive.inspect": _archive_inspect,
     "archive.import": _archive_import,
     "export.sessions": _export_sessions,
+    "sessions.archive": _sessions_archive,
 }
 
 
