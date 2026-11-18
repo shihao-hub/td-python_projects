@@ -75,7 +75,7 @@ douyinnotify schema    # 导出与注册同源的工具契约 JSON
 ## 实现要点
 
 - 抓取：启动系统 Chrome `--headless=new` + 裸 CDP（websocket-client），导航博主主页后**在页面上下文内 `fetch` 作品接口** `/aweme/v1/web/aweme/post/`，取 `aweme_list`（newest-first，含 id / 标题 / 发布时间）。不登录、不点页面任何元素（登录弹窗只是 UI 遮罩，忽略即可）。
-  - **为何不用 DOM 锚点**：未登录下页面渲染的作品列表已失效——容器内是空的 `scroll-list` 加“服务异常，重新刷新拉取数据”，页面上仅存的 `/video/` 锚点全在**页脚推荐流**里（随机、每轮互不重叠）。把它当作品会造成“真实更新永远检不出 + 偶尔推送无关视频”（修订背景见 `docs/projects/python_projects/douyinnotify/plans/02-douyin-fetch-api-source.md`）。
+  - **为何不用 DOM 锚点**：未登录下页面渲染的作品列表已失效——容器内是空的 `scroll-list` 加“服务异常，重新刷新拉取数据”，页面上仅存的 `/video/` 锚点全在**页脚推荐流**里（随机、每轮互不重叠）。把它当作品会造成“真实更新永远检不出 + 偶尔推送无关视频”（修订背景见 `docs/projects/python_projects/douyinnotify/plans/archive/02-douyin-fetch-api-source.md`）。
   - **为何不用 CDP 读响应体**：页面自身发起的该 XHR，用 `Network.getResponseBody` 取回恒为空 body；改成在页面上下文里 `fetch` 同一接口即可拿到完整 JSON（请求由页面 origin 发出、自带 ttwid 等设备指纹，因此既不需要 `a_bogus` 签名，也不需要登录）。
   - **失败即失败**：HTTP 非 200 / `status_code != 0` / JSON 不可解析 / 缺 `aweme_list` / 列表为空，一律判为抓取失败（不写 state、不推送、记 ERROR 日志），**绝不退回页脚锚点充数**。
 - 新视频判定：aweme_id 集合差；每轮把抓到的 id 全量并入 `seen`。
@@ -91,7 +91,7 @@ douyinnotify schema    # 导出与注册同源的工具契约 JSON
 5. CDP 依赖本机 Chrome；删除 venv 后需 `uv sync` 重新生成 exe 并重装计划任务。
 6. `install_schedule` 假定 exe 路径无空格（仓库路径约定满足）；改 `check_interval_hours` / `schedule_start` 后需重跑 `install_schedule`。
 7. 未登录：博主把作品设为仅登录可见或私密时，接口同样拿不到（表现为抓取失败，不会误报）。
-8. 抓取依赖抖音 web 接口（非官方契约）：若接口改版或开始要求签名 / 登录，检查会如实失败（不误报），需按 `plans/02-douyin-fetch-api-source.md` 重新实证。
+8. 抓取依赖抖音 web 接口（非官方契约）：若接口改版或开始要求签名 / 登录，检查会如实失败（不误报），需按 `plans/archive/02-douyin-fetch-api-source.md` 重新实证。
 
 ## 开发
 
